@@ -1,0 +1,10 @@
+# -----------------------------------------------------------
+# Project Dependencies
+# -----------------------------------------------------------
+
+# FastAPI App
+fastapi[standard]
+
+# Supporting libraries
+requests
+python-dotenv
