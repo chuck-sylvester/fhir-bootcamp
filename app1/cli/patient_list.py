@@ -5,6 +5,11 @@
 # retrieve and display a list of patient Resource records.
 # -----------------------------------------------------------
 
+"""
+Run as a module from the project root folder:
+python -m app1.cli.patient_list 
+"""
+
 # Standard library imports
 import os
 import json
@@ -14,6 +19,10 @@ from typing import Any, Final
 # Third-party imports
 import requests
 from dotenv import load_dotenv
+
+# Project modules
+from app1.cli.color import *
+from app1.cli.helper import *
 
 load_dotenv()
 
@@ -48,37 +57,33 @@ def print_patient_resource_summary(patient_resource: dict[str, Any]) -> None:
     resource_link_0 = patient_resource.get("link")[0]
     # resource_count = len(patient_resource.get("entry"))
 
-    print(f"🔥 {APP_NAME}\n")
-    print("-" * 65)
+    print(f"🔥 {YELLOW}{APP_NAME} 🔥{RESET}\n")
+    print(f"{'-' * 65}")
     print("Patient Resource Summary")
-    print("-" * 65)
-    print(f" Resource Type: {resource_type}")
-    print(f"   Resource ID: {resource_id}")
-    print(f"Resource Total: {resource_total}")
-    print(f" Link-Self URL: {resource_link_0.get("url")}")
+    print(f"-" * 65)
+    print(f" Resource Type: {CYAN}{resource_type}{RESET}")
+    print(f"   Resource ID: {CYAN}{resource_id}{RESET}")
+    print(f"Resource Total: {CYAN}{resource_total}{RESET}")
+    print(f" Link-Self URL: {CYAN}{CYAN}{resource_link_0.get("url")}{RESET}")
     # print(f"Resource Count: {resource_count}")
     print("-" * 65)
-    print()
+    print(RESET)
 
 
-def print_patient_list(patient_resource):
+def print_patient_list(patients):
     # Get "entry": list
-    patients = patient_resource.get("entry")
 
-    if patients:
-        pass  # there is at least one patient entry
-    else:
-        print("\nWarning, Will Robinson... there are no Patient Resource entries...\n")
-        return
-
-    print("┌", end='')
-    print("─" * 82, end='')
+    print(f"┌", end='')
+    print("─" * 112, end='')
     print("┐")
     print(f"│ Resource ID {' ' * 25}", end='')
-    print(f"| Patient Name {' ' * 15}", end='')
-    print(f"| Gender {' ' * 4} |")
+    print(f"| Patient Name {' ' * 12}", end='')
+    print(f"| Gender {' ' * 4}", end='')
+    print(f"| Birth Date {' ' * 1}", end='')
+    print(f"| Age ", end='')
+    print(f"| Last Update |")
     print("├", end='')
-    print("─" * 82, end='')
+    print("─" * 112, end='')
     print("┤")
 
     for patient in patients:
@@ -87,21 +92,28 @@ def print_patient_list(patient_resource):
         patient_name_family = patient.get("resource").get("name")[0].get("family")
         patient_full_name = f"{patient_name_given} {patient_name_family}"
         patient_gender = patient.get("resource").get("gender")
+        patient_birth_date = patient.get("resource").get("birthDate")
+        patient_age = calculate_age(patient_birth_date)
+        if patient_age == -1:
+            patient_age = "--"
+        last_updated = patient.get("resource").get("meta").get("lastUpdated")
 
         print("│ ", end='')
         print(f'{patient_id:<36}', end=' | ')
-        print(f'{patient_full_name:<27} | ', end='')
-        print(f'{patient_gender:<11} |')
+        print(f'{patient_full_name:<24} | ', end='')
+        print(f'{patient_gender:<10} | ', end='')
+        print(f'{patient_birth_date:<11} | ', end='')
+        print(f'{patient_age:<3} | ', end='')
+        print(f'{last_updated[:10]}  |')
     print("└", end='')
-    print("─" * 82, end='')
+    print("─" * 112, end='')
     print("┘")
-    print()
+    print(RESET)
 
 
 def main():
     """
-    Fetch data via GET /Patients & return as Python dictionary
-    Stop on failure or empty dictionary
+    Fetch data; stop on failure or empty dictionary
     Display in JSON format to terminal & write results to file
     Display a summary of data returned
     Get a list of patient records from the Python dictionary
@@ -113,19 +125,27 @@ def main():
     patient_resource = fetch_patient_resource(FHIR_BASE_URL, headers)
     
     if patient_resource:
-        print()
+        pass
     else:
         return
     
+    # Print to terminal stdout
     patient_resource_json = json.dumps(patient_resource, indent=2)
-    # print(patient_resource_json, "\n")
+    print(patient_resource_json, "\n")
 
+    # Write to file
     output_path = Path("./app1/data/patient.json")
     output_path.write_text(patient_resource_json + "\n", encoding="utf-8")
     
     print_patient_resource_summary(patient_resource)
 
-    print_patient_list(patient_resource)
+    patients = patient_resource.get("entry")
+
+    if patients:
+        print_patient_list(patients)
+    else:
+        print("Danger, Will Robinson... there are no Patient Resource entries.\n")
+        return
 
 
 if __name__ == "__main__":

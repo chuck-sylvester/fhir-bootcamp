@@ -1,0 +1,15 @@
+{
+  "resourceType": "Patient",
+  "identifier": "cps-test-0000-0001",
+  "active": true,
+  "name": [
+    {
+      "use": "official",
+      "family": "Antonelli",
+      "given": [
+        "Andrea",
+        "Kimi"
+      ]
+    }
+  ]
+}
