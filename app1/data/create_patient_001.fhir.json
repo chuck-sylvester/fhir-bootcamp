@@ -1,0 +1,23 @@
+{
+  "resourceType": "Patient",
+  "identifier": ["cps-test-001"],
+  "active": true,
+  "name": [
+    {
+      "use": "official",
+      "family": "Antonelli",
+      "given": [
+        "Andrea",
+        "Kimi"
+      ]
+    }
+  ],
+  "gender": "male",
+  "birthDate": "2006-08-25",
+  "photo": [
+    {
+      "title": "Thumbnail photo of patient",
+      "url": "https://picsum.photos/150"
+    }
+  ]
+}

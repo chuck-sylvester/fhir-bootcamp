@@ -13,6 +13,9 @@ pycache/ *.pyc
 __pycache__/
 .cache/
 
+# FHIR R4 JSON schema (downloaded from HL7 site)
+.vscode/schemas/
+
 # Environments
 .env
 env/
