@@ -110,9 +110,6 @@ async def auth_callback(
     if "error" in token_data:
         raise HTTPException(status_code=400, detail=token_data)
 
-    print("===> scope length:", len(token_data.get("scope", "")))                                                       
-    print("===> scope:", token_data.get("scope", ""))
-
     # Clear any data from a previous session before writing the new one.
     # Without this, stale keys loaded from an existing session cookie (e.g.
     # access_token written by an older version of this code) carry over and
@@ -142,6 +139,7 @@ async def auth_callback(
     ).isoformat()
     request.session["scope"] = token_data.get("scope", "")
 
+    print("===> access_token:", token_data["access_token"])
     print("===> token exchange complete, session_id:", session_id)
 
     # A server-side 302 redirect here would silently drop the session cookie in

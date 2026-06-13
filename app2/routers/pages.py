@@ -17,8 +17,6 @@ router = APIRouter()
 async def home(request: Request):
     """Application landing page. Shows session status when authenticated."""
     print("===> processing '/' route...")
-    print("===> session:", dict(request.session))
-    access_token = request.session.get("access_token")
     expires_at_str = request.session.get("token_expires_at")
 
     session_id = request.session.get("session_id")
