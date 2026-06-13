@@ -1,0 +1,67 @@
+---------------------------------------------
+Friday, 6/12/26
+---------------------------------------------
+
+New Epic App - Uno
+---------------------------------------------
+             Application Name: FHIR Bootcamp Demo
+         Application Audience: Patients
+Automatic Client Distribution: None
+     Public Documentation URL: https://github.com/chuck-sylvester
+                Incoming APIs: Selected all (R4)
+                 Endpoint URI: http://localhost:8000/auth/callback
+ Can Register Dynamic Clients: uncheck
+       Is Confidential Client: checked
+---------------------------------------------
+                    Client ID: 37627496-0029-4967-b51e-7e20b6c886ca
+     Non-Production Client ID: 4748ee3e-be59-4933-a2a1-7fc2e4e12956
+        SMART on FHIR Version: R4
+          SMART Scope Version: SMART v2
+    FHIR ID Generation Scheme: Use Unconstrained FHIR IDs
+                      Summary: Epic EHR Sandbox App - Uno
+
+
+Epic SMART .well-known
+---------------------------------------------
+authorization_endpoint: https://fhir.epic.com/interconnect-fhir-oauth/oauth2/authorize
+        token_endpoint: https://fhir.epic.com/interconnect-fhir-oauth/oauth2/token
+
+   Sandbox Client Secret: T85ivlCr5AuXrXsN7oTU0Ruovn406ooQHn6QKhOiY6uRGdd3Rt4CrPqoGlljbt6crFDVhgR0RXdWrG/8aUnPrQ==
+              Store Hash: I clicked green button to store hash on Epic server
+Generated Hash (I think): FF36B4340D43CAE2D24D02474BA7DEC6875D1955
+
+http://localhost:8000/auth/callback?code=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ1cm46b2lkOjEuMi44NDAuMTE0MzUwLjEuMTMuMC4xLjcuMy42ODg4ODQuMTAwIiwiY2xpZW50X2lkIjoiNDc0OGVlM2UtYmU1OS00OTMzLWEyYTEtN2ZjMmU0ZTEyOTU2IiwiZXBpYy5lY2kiOiJ1cm46ZXBpYzpPcGVuLkVwaWMtY3VycmVudCIsImVwaWMubWV0YWRhdGEiOiJXLUNvQXpiQ2NzTTJzaW9DMWFwQ0N6Yk5EZkhhQThZVlFjdlNoNDFmakctUUQ3cGtnaEFWdE9zS2g4b20yaFlGSXNmbFpzcXk0dGZlMzhkaTZIdjNVOXVyc3N2RHBpSjZWeXp2VmhwN2hPa1AyU09LcTdtRzkyaUhMaTRHOUFTbSIsImVwaWMudG9rZW50eXBlIjoiY29kZSIsImV4cCI6MTc4MTI5MjMxMywiaWF0IjoxNzgxMjkyMDEzLCJpc3MiOiJ1cm46b2lkOjEuMi44NDAuMTE0MzUwLjEuMTMuMC4xLjcuMy42ODg4ODQuMTAwIiwianRpIjoiYWEyNWVjYWItYmQ4MS00ZDBjLThkYmYtN2VjMzgwY2JhM2IzIiwibmJmIjoxNzgxMjkyMDEzLCJzdWIiOiJlYjRHaWE3RnlpanRQbVhrcnRqUnBQdzMifQ.Y_gb5tt6mwQsX9Qy99trXCV2MLg_iyY1ZNMMh0KJIZa_po1whahN-CWBQQbp97_jcupaKU5ULANdWiM04a6HOy_roJFqaymfGXka9t_uBzUSqORyV6-zbYS6WmjA7wx-yhulWacOVc9iHECp721IRWsJQAa1GJSzQEk3y6gDW7ZXb0wrtLdS9HrSxV1abt4wnpvjcxMQ2NcIzaWOhHH1zM4RfHfWsu9jErnjh5C_IG-b6qOelNH8oEtOm6wHmqisJ1EWCZ2fikDRFs8fSuHMt_kfYdRiEvsyncVaX50o_l8wjYw4IwyXBMSSNDlpHweeruDnfGcyu_u7YUPpVVrXCA
+
+
+------------------------------------------------------------
+Saturday, 6/13/26
+------------------------------------------------------------
+
+New Epic App - Dos
+------------------------------------------------------------
+             Application Name: FHIR Bootcamp Demo
+         Application Audience: Patients
+Automatic Client Distribution: None
+     Public Documentation URL: https://  github.com/chuck-sylvester
+                Incoming APIs: Selected all (R4)
+                 Endpoint URI: http://  localhost:8000/auth/callback
+ Can Register Dynamic Clients: uncheck
+       Is Confidential Client: checked
+   Requires Persistent Access: unchecked
+------------------------------------------------------------
+     Client Secret (generated: ZCUECrmNfww3aoNEkeILmJMz5UYPyrQUUHlQmPkxY0x8BRIkaIBeVJWY8U0SR8A7UsnWi0+HbB40AoiTxlmwTA==
+   Client Secret (store hash): 0A13843ACF9AC4D9B357C2E96DA6C890B25A5D74
+------------------------------------------------------------
+                    Client ID: c7291a12-821b-4b9f-834f-a86fa6242e32
+     Non-Production Client ID: a2c447d6-fe8a-44ea-90ed-b0611d3530d2
+        SMART on FHIR Version: R4
+          SMART Scope Version: SMART v2
+    FHIR ID Generation Scheme: Use Unconstrained FHIR IDs
+                      Summary: Epic EHR Sandbox App - Dos
+                  Description: Learning how to build an OAuth 2.0 integration with the Epic sandbox
+                    Thumbnail: uploaded msnsw-logo.png
+                      Clicked: "Save & Ready for Sandbox"
+
+ 
+
+

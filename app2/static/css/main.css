@@ -1,0 +1,123 @@
+/* --------------------------------------------------------------------
+ * Project Styles
+ * -------------------------------------------------------------------- */
+
+* {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+	}
+
+body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	background: #f0f2f5;
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	min-height: 100vh;
+}
+
+.card {
+	background: #ffffff;
+	border-radius: 10px;
+	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+	padding: 3rem 3.5rem;
+	text-align: center;
+	max-width: 480px;
+	width: 100%;
+}
+
+.card h1 {
+	font-size: 1.6rem;
+	color: #1a1a2e;
+	margin-bottom: 0.75rem;
+}
+
+.card p {
+	color: #555;
+	font-size: 0.95rem;
+	line-height: 1.6;
+	margin-bottom: 2rem;
+}
+
+.btn {
+	display: inline-block;
+	background: #0057b8;
+	color: #ffffff;
+	text-decoration: none;
+	padding: 0.8rem 1.75rem;
+	border-radius: 6px;
+	font-size: 0.95rem;
+	font-weight: 500;
+	transition: background 0.2s ease;
+}
+
+.btn:hover {
+	background: #004499;
+}
+
+.btn--secondary {
+	background: #6b7280;
+}
+
+.btn--secondary:hover {
+	background: #4b5563;
+}
+
+.badge {
+	display: inline-block;
+	padding: 0.3rem 0.9rem;
+	border-radius: 999px;
+	font-size: 0.8rem;
+	font-weight: 600;
+	letter-spacing: 0.03em;
+	margin-bottom: 1.5rem;
+}
+
+.badge--active {
+	background: #d1fae5;
+	color: #065f46;
+}
+
+.badge--expired {
+	background: #fee2e2;
+	color: #991b1b;
+}
+
+.info-table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-bottom: 1.75rem;
+	text-align: left;
+	font-size: 0.9rem;
+}
+
+.info-table th,
+.info-table td {
+	padding: 0.55rem 0.5rem;
+	border-bottom: 1px solid #f0f0f0;
+	vertical-align: top;
+}
+
+.info-table th {
+	color: #6b7280;
+	font-weight: 500;
+	width: 38%;
+	white-space: nowrap;
+}
+
+.info-table td {
+	color: #1a1a2e;
+	word-break: break-all;
+}
+
+.token-redacted {
+	color: #9ca3af;
+	font-style: italic;
+}
+
+.action-row {
+	display: flex;
+	justify-content: center;
+	gap: 0.75rem;
+}

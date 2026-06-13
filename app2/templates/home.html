@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Epic Sandbox Integration</title>
+    <link rel="icon" href="/static/image/favicon-fhir-72.ico">
+    <link rel="stylesheet" href="{{ request.url_for('static', path='css/main.css') }}">
+</head>
+<body>
+    <div class="card">
+        <h1>Epic Sandbox Integration</h1>
+
+        {% if session_active %}
+
+            {% if token_expired %}
+            <div class="badge badge--expired">Token Expired</div>
+            {% else %}
+            <div class="badge badge--active">Session Active</div>
+            {% endif %}
+
+            <table class="info-table">
+                <tr>
+                    <th>Token expires</th>
+                    <td>{{ expires_display }}</td>
+                </tr>
+                <tr>
+                    <th>Scope</th>
+                    <td><code>{{ scope }}</code></td>
+                </tr>
+                <tr>
+                    <th>Access token</th>
+                    <td><code class="token-redacted">[stored in session — not exposed to browser]</code></td>
+                </tr>
+            </table>
+
+            <div class="action-row">
+                <a href="/auth/logout" class="btn btn--secondary">Disconnect</a>
+            </div>
+
+        {% else %}
+
+            <p>Connect your Epic Sandbox account to authorize this application and begin accessing patient data.</p>
+            <a href="/auth/login" class="btn">Connect to Epic Sandbox</a>
+
+        {% endif %}
+    </div>
+</body>
+</html>
