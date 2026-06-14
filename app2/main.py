@@ -23,7 +23,7 @@ from app2.routers import auth, pages
 async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient()
     app.state.templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
-    app.state.token_store = {}  # not sure if this is needed
+    app.state.token_store = {}  # inline memory token store keyed by session_id
 
     yield
 

@@ -115,14 +115,17 @@ App2 implements the standard SMART on FHIR Authorization Code flow. The steps be
 
 ### Step 1 — Login redirect (`GET /auth/login`)
 
-The user clicks "Connect to Epic Sandbox." The browser makes a `GET /auth/login` request. The server builds an Epic authorization URL with the following query parameters:
+The user clicks "Connect to Epic Sandbox." The browser makes a `GET /auth/login` request. The server generates a cryptographically random state value, stores it in the session, then builds an Epic authorization URL with the following query parameters:
 
 ```
 response_type=code
 client_id=<EPIC_NONPROD_CLIENT_ID>
 scope=<EPIC_SCOPE (URL-encoded)>
+state=<random-state-value>
 redirect_uri=<APP_REDIRECT_URI>
 ```
+
+The state value is generated with `secrets.token_urlsafe(32)`, which produces 32 random bytes encoded as a URL-safe Base64 string (~43 characters). It is stored in the session under the key `oauth_state` before the redirect is issued.
 
 The scope string is URL-encoded with `urllib.parse.urlencode`, which percent-encodes the forward slashes in SMART scope strings (e.g., `patient/Patient.read` → `patient%2FPatient.read`). Epic requires this encoding.
 
@@ -136,11 +139,20 @@ The user's browser follows the redirect to Epic. The user logs in with their Epi
 GET /auth/callback?code=<authorization_code>
 ```
 
-The authorization code expires in approximately 60 seconds.
+The authorization code expires in approximately 60 seconds. Epic also echoes the `state` value back in the callback query string:
+
+```
+GET /auth/callback?code=<authorization_code>&state=<random-state-value>
+```
 
 ### Step 3 — Token exchange (`GET /auth/callback`)
 
-The server receives the callback. It immediately makes a back-channel `POST` directly to the Epic token endpoint — the user's browser is not involved in this step. This is what makes the Authorization Code flow more secure than the implicit flow: the access token never travels through the browser's address bar or history.
+The server receives the callback. Before doing anything else with the authorization code, it validates the state parameter:
+
+1. It reads and immediately removes `oauth_state` from the session using `request.session.pop("oauth_state", None)`. Using `pop` rather than `get` is important: it makes state single-use, so the same callback cannot be replayed against a still-valid session entry.
+2. It compares the retrieved value to the `state` query parameter Epic returned. If they do not match — or if `oauth_state` was not in the session at all — the request is rejected with `HTTP 400`.
+
+Only after state validation passes does the server proceed with the authorization code. It immediately makes a back-channel `POST` directly to the Epic token endpoint — the user's browser is not involved in this step. This is what makes the Authorization Code flow more secure than the implicit flow: the access token never travels through the browser's address bar or history.
 
 The POST body uses `client_secret_post` authentication (client credentials in the request body):
 
@@ -174,6 +186,76 @@ After storing the session, the callback handler returns a `200 OK` response with
 ```
 
 This causes the browser to land on the callback page first (storing the `Set-Cookie` header), and then navigate to `/` one second later. A `302 redirect` is not used here because some browsers (Chrome, Safari) drop `SameSite=Lax` cookies set on redirect responses that arrive at the end of a cross-site redirect chain originating from Epic's domain. Returning a `200` breaks the cross-site context before the navigation to `/` occurs.
+
+---
+
+## OAuth State Parameter and CSRF Protection
+
+### What is the state parameter?
+
+The `state` parameter is an opaque random value that the client generates at the start of an OAuth flow, sends to the authorization server, and expects to receive back unchanged in the callback. It acts as a nonce — a one-time token that binds the callback to the specific browser session that initiated the login.
+
+RFC 6749 (the OAuth 2.0 specification), Section 10.12, explicitly recommends using `state` for CSRF protection. SMART on FHIR inherits this guidance. It is optional in the spec but considered a required best practice in any implementation that cares about security.
+
+### What attack does it prevent?
+
+Without state, the OAuth callback endpoint is vulnerable to a **login CSRF** attack (also called a "session fixation via OAuth" attack). The sequence looks like this:
+
+1. An attacker initiates an OAuth flow against your app from their own browser, but does not complete the consent step. They capture the authorization URL or the callback URL with a valid `code`.
+2. The attacker tricks a victim into clicking a crafted link that sends the victim's browser to your `/auth/callback` with the attacker's authorization code.
+3. The victim's browser completes the callback — your server exchanges the code for a token and writes the resulting session cookie to the victim's browser.
+4. The victim is now logged in, but the authenticated identity belongs to the attacker. The attacker can now access the victim's account (or, in a FHIR context, view or submit data as the victim).
+
+This is sometimes called a "login CSRF" because the attack exploits the login endpoint rather than a form submission — the victim is coerced into logging in as someone else.
+
+### How state prevents it
+
+With state:
+
+1. When the victim's browser attempts to complete the forged callback, the server checks the `state` parameter Epic echoes back against the value stored in the victim's session.
+2. The victim's session contains no `oauth_state` (they never clicked "Connect to Epic") — or it contains a different value generated by a legitimate login attempt.
+3. The check fails, the request is rejected with `HTTP 400`, and the forged login never completes.
+
+State works because it is bound to the session: only the browser that initiated the flow has the matching value. An attacker operating from a separate browser cannot predict or steal the victim's session state.
+
+### Implementation in app2
+
+The implementation uses three standard Python building blocks:
+
+**Generate** (in `/auth/login`):
+```python
+state = secrets.token_urlsafe(32)
+request.session["oauth_state"] = state
+```
+
+`secrets.token_urlsafe(32)` generates 32 cryptographically random bytes and encodes them as URL-safe Base64 (~43 characters). It uses the operating system's secure random number generator (`os.urandom`), which makes the output unpredictable.
+
+**Send** (still in `/auth/login`):
+```python
+params = {
+    ...
+    "state": state,
+    ...
+}
+```
+
+The state value is included in the authorization URL query string. Epic stores it and echoes it back verbatim in the callback.
+
+**Validate and consume** (in `/auth/callback`):
+```python
+expected_state = request.session.pop("oauth_state", None)
+if not expected_state or state != expected_state:
+    raise HTTPException(status_code=400, detail="State mismatch or missing state")
+```
+
+`pop` reads the stored value and removes it from the session in a single operation. This enforces single-use: once validated, the state cannot be replayed against the same session. The comparison then catches two distinct failure modes:
+
+- `expected_state is None` — no login flow was initiated from this session (possible replay or forged request)
+- `state != expected_state` — the value Epic returned does not match what was sent (tampered or misrouted callback)
+
+### Why this matters in a FHIR context
+
+In a clinical application, the stakes of a successful login CSRF are higher than in a typical web app. A forged OAuth session could give an attacker access to a patient's health records, allow fraudulent FHIR write operations, or allow an attacker to impersonate a clinician. Implementing state correctly is part of SMART on FHIR's security model and should be treated as non-negotiable in any app that handles real patient data.
 
 ---
 

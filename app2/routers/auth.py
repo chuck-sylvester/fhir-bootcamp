@@ -21,7 +21,7 @@ from app2.config import settings
 router = APIRouter()
 
 @router.get("/login")
-async def auth_login(patient: str = ""):
+async def auth_login(request: Request, patient: str = ""):
     """
     Step 1 of the OAuth 2.0 Authorization Code flow.
 
@@ -33,10 +33,19 @@ async def auth_login(patient: str = ""):
     The optional `patient` query parameter scopes the session to a specific
     Epic patient ID. Omit it for general staff access.
     """
+
+    # Generate cryptographically random state value
+    state = secrets.token_urlsafe(32)
+    print(f"===> generated state: {state}...")
+
+    # Store generated state in the session
+    request.session["oauth_state"] = state
+
     params = {
         "response_type": "code",
         "client_id": settings.epic_nonprod_client_id,
         "scope": settings.epic_scope,
+        "state": state,
         "redirect_uri": settings.app_redirect_uri,
     }
     # urlencode percent-encodes all special characters, including the forward
@@ -73,6 +82,13 @@ async def auth_callback(
             status_code=400,
             detail={"error": error, "error_description": error_description},
         )
+
+    # Read and consume the stored state
+    expected_state = request.session.pop("oauth_state", None)
+
+    # Validate
+    if not expected_state or state != expected_state:
+        raise HTTPException(status_code=400, detail="State mismatch or missing state")
 
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
@@ -139,8 +155,8 @@ async def auth_callback(
     ).isoformat()
     request.session["scope"] = token_data.get("scope", "")
 
-    print("===> access_token:", token_data["access_token"])
-    print("===> token exchange complete, session_id:", session_id)
+    print(f"===> token exchange complete, session_id: {session_id}")
+    print(f"===> access_token:\n{token_data['access_token']}")
 
     # A server-side 302 redirect here would silently drop the session cookie in
     # some browsers (Chrome, Safari) because this response is part of a cross-site
