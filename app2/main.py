@@ -24,9 +24,7 @@ async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient()
     app.state.templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
     app.state.token_store = {}  # inline memory token store keyed by session_id
-
     yield
-
     # Gracefully close HTTP client on shutdown to release connections
     await app.state.http_client.aclose()
 

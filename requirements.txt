@@ -8,7 +8,8 @@ fastapi[standard]==0.136.3
 # Templating and static file serving
 jinja2==3.1.6
 
-# HTTP client
+# HTTP clients
+requests==2.34.2
 httpx==0.28.1
 
 # Session cookie signing (required by starlette.middleware.sessions.SessionMiddleware)

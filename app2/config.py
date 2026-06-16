@@ -7,6 +7,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings (BaseSettings):
+    """Validates runtime system configuration strings"""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # Application
@@ -29,9 +30,9 @@ class Settings (BaseSettings):
     epic_client_secret: str
     epic_authorize_url: str
     epic_token_url: str
-    epic_fhir_base_url: str = "https://fhir.epic.com"
+    epic_fhir_base_url: str
     epic_scope: str
     app_redirect_uri: str
 
-# Module-level singleton - instantiated once when module is first imported
+# Module-level singleton instance
 settings = Settings()

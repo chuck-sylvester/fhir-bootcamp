@@ -97,19 +97,33 @@ async def auth_callback(
     # opening a new TCP connection for every token exchange.
     http_client: httpx.AsyncClient = request.app.state.http_client
 
-    response = await http_client.post(
-        settings.epic_token_url,
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": settings.app_redirect_uri,
-            "client_id": settings.epic_nonprod_client_id,
-            "client_secret": settings.epic_client_secret
-        },
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    )
+    # httpx.TransportError is the base class for all network-level failures:
+    # ReadError (connection reset mid-response), ConnectError (refused),
+    # TimeoutException (no response in time), etc. These come from the network
+    # between our server and Epic — not from Epic returning an error status.
+    # Without this guard they propagate uncaught and produce a 500 crash.
+    try:
+        response = await http_client.post(
+            settings.epic_token_url,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": settings.app_redirect_uri,
+                "client_id": settings.epic_nonprod_client_id,
+                "client_secret": settings.epic_client_secret
+            },
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+    except httpx.TransportError as exc:
+        # Surface the exception type (e.g. "ReadError") so it is visible in
+        # the browser during development without exposing internal stack traces.
+        raise HTTPException(
+            status_code=502,
+            detail=f"Network error during token exchange with Epic ({type(exc).__name__}). "
+                   "Please try connecting again.",
+        )
 
     # A non-2xx status means the token endpoint itself returned an error
     # (wrong secret, expired code, mismatched redirect_uri, etc.).
@@ -143,6 +157,16 @@ async def auth_callback(
         "access_token": token_data["access_token"],
         "refresh_token": token_data.get("refresh_token", ""),
         "scope": token_data.get("scope", ""),
+        # id_token is an OIDC JWT containing identity claims (sub, fhirUser, name,
+        # etc.). Present only when the openid scope is granted. Stored server-side
+        # alongside access_token so its size does not inflate the browser cookie.
+        "id_token": token_data.get("id_token", ""),
+        # patient is the FHIR ID of the in-context patient, included by Epic in
+        # the token response for patient-scoped standalone launches. Required as
+        # a search parameter when querying patient-specific resources such as
+        # MedicationRequest (/MedicationRequest?patient=<id>). Empty string when
+        # the launch was not patient-scoped (e.g. a provider/staff login).
+        "patient": token_data.get("patient", ""),
     }
 
     # Write only lightweight metadata to the session cookie. The session_id

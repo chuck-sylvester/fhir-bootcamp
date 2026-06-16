@@ -1,0 +1,46 @@
+{#
+  portal.html — base layout template for all portal pages.
+
+  Child templates extend this file using Jinja2 template inheritance.
+  Two override blocks are defined below:
+    "actions" — action buttons between the two hr tags
+    "content" — main content and result area below the second hr
+
+  The title variable is passed from the route handler (e.g. "Patient Portal").
+
+  Note: this header uses a Jinja2 block comment rather than an HTML comment
+  because Jinja2 evaluates block and extends tags before HTML is parsed,
+  even when those tags appear inside an HTML comment.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}{{ title }}{% endblock %}</title>
+  <!--
+    HTMX — handles server-driven interactions without writing JavaScript.
+    Loaded here in the base template so every child page inherits it.
+  -->
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+  <link rel="icon" href="/static/image/favicon-fhir-72.ico">
+  <link rel="stylesheet" href="https://kit.fontawesome.com/124182fb50.css">
+  <link rel="stylesheet" href="{{ request.url_for('static', path='css/main.css') }}">
+</head>
+<body class="portal-body">
+
+  <h1><i class="fa-sharp fa-solid fa-heart-pulse fa-xl portal-icon"></i>&nbsp;{{ title }}</h1>
+  <hr><br>
+
+  <!-- Child templates place their FHIR action buttons here -->
+  {% block actions %}{% endblock %}
+
+  <br><hr><br>
+
+  <!-- Child templates place their result / content area here -->
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+</body>
+</html>

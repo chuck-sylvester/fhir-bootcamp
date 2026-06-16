@@ -8,13 +8,37 @@
 	padding: 0;
 	}
 
-body {
+.home-body {
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-	background: #f0f2f5;
+	background: #FF6600;
 	display: flex;
 	justify-content: center;
 	align-items: center;
 	min-height: 100vh;
+	position: relative;
+}
+
+.page-logo {
+	position: absolute;
+	top: 0.75rem;
+	left: 6rem;
+	height: 8rem;
+}
+
+.portal-body {
+	font-family: Arial, Helvetica, sans-serif;
+	background-color: #f3f4f6;
+	color: #111827;
+	margin: 2em;
+}
+
+.portal-icon {
+	color: red;
+}
+
+.portal-body h1 {
+	font-size: 2rem;
+	line-height: 2.0;
 }
 
 .card {
@@ -23,7 +47,7 @@ body {
 	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
 	padding: 3rem 3.5rem;
 	text-align: center;
-	max-width: 720px;
+	max-width: 800px;
 	width: 100%;
 }
 
@@ -50,6 +74,9 @@ body {
 	font-size: 0.95rem;
 	font-weight: 500;
 	transition: background 0.2s ease;
+	/* Required when .btn is applied to a <button> element instead of an <a> tag */
+	border: none;
+	cursor: pointer;
 }
 
 .btn:hover {
@@ -120,4 +147,192 @@ body {
 	display: flex;
 	justify-content: center;
 	gap: 0.75rem;
+}
+
+/* --- ID Token modal dialog ------------------------------------------------- */
+
+/*
+ * <dialog> is a native HTML element for modal overlays. showModal() centers it
+ * on the screen and activates the ::backdrop pseudo-element automatically.
+ * ESC key closes it natively — no JavaScript is required for that behavior.
+ *
+ * margin: auto is required here because the global * { margin: 0 } reset at
+ * the top of this file overrides the browser's UA stylesheet, which normally
+ * sets margin: auto on <dialog> to center it in the viewport. Without this
+ * explicit override the dialog appears in the top-left corner instead.
+ */
+dialog {
+	border: none;
+	border-radius: 10px;
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+	padding: 0;
+	max-width: 1050px;
+	width: 90vw;
+	max-height: 80vh;
+	margin: auto;
+}
+
+/* Semi-transparent dark layer behind the dialog box */
+dialog::backdrop {
+	background: rgba(0, 0, 0, 0.5);
+}
+
+.dialog-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 1.25rem 1.5rem;
+	border-bottom: 1px solid #f0f0f0;
+}
+
+.dialog-header h2 {
+	font-size: 1.1rem;
+	color: #1a1a2e;
+	margin: 0;
+}
+
+/* × close button — no background or border, just a styled character */
+.dialog-close {
+	background: none;
+	border: none;
+	font-size: 1.5rem;
+	line-height: 1;
+	color: #6b7280;
+	cursor: pointer;
+	padding: 0.2rem 0.5rem;
+	border-radius: 4px;
+}
+
+.dialog-close:hover {
+	background: #f3f4f6;
+	color: #1a1a2e;
+}
+
+/*
+ * Scrollable content area so tall claim sets do not overflow the viewport.
+ * max-height subtracts the approximate header height from the dialog total.
+ */
+.dialog-body {
+	padding: 1.25rem 1.5rem;
+	overflow-y: auto;
+	max-height: calc(80vh - 5rem);
+}
+
+.dialog-subtitle {
+	font-size: 0.85rem;
+	color: #6b7280;
+	margin-bottom: 1rem;
+}
+
+/*
+ * .fhir-json carries its own max-height for standalone portal use. Inside the
+ * dialog, .dialog-body owns the scroll, so remove the inner constraint here
+ * to avoid a nested double-scrollbar situation.
+ */
+.dialog-body .fhir-json {
+	max-height: none;
+	overflow-y: visible;
+}
+
+/* --- Portal action bar -------------------------------------------------- */
+
+.portal-actions {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+}
+
+/* --- HTMX loading indicator --------------------------------------------- */
+/*
+ * HTMX looks for elements with the class .htmx-indicator and keeps them at
+ * opacity: 0 by default. When a request is in flight, HTMX adds the class
+ * .htmx-request to the element that triggered the request (or to the body).
+ * The CSS rules below catch both cases and fade the indicator in.
+ */
+
+.htmx-indicator {
+	opacity: 0;
+	transition: opacity 200ms ease-in;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+	opacity: 1;
+}
+
+.fhir-loading {
+	font-size: 0.85rem;
+	color: #6b7280;
+	font-style: italic;
+}
+
+/* --- FHIR result area --------------------------------------------------- */
+
+#result {
+	/* Reserve space so the page does not jump when content first appears */
+	min-height: 1.5rem;
+}
+
+.fhir-json {
+	/* Monospace font stack for code / data display */
+	font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+	font-size: 0.82rem;
+	line-height: 1.6;
+
+	/* Dark code-block look against the portal's light gray background */
+	background: #1e2030;
+	color: #cdd6f4;
+
+	/* Spacing and shape */
+	padding: 1.25rem 1.5rem;
+	border-radius: 8px;
+	border-left: 4px solid #0057b8;
+
+	/* Scroll wide or tall responses rather than overflowing the page */
+	overflow-x: auto;
+	overflow-y: auto;
+	max-height: 70vh;
+
+	/*
+	 * white-space: pre preserves the indentation produced by json.dumps(indent=2).
+	 * Without it the browser collapses all whitespace and the JSON becomes one line.
+	 */
+	white-space: pre;
+}
+
+/* --- FHIR error display ------------------------------------------------- */
+
+.fhir-error {
+	color: #991b1b;
+	background: #fee2e2;
+	padding: 0.75rem 1rem;
+	border-radius: 6px 6px 0 0;
+	border-left: 4px solid #dc2626;
+	font-size: 0.9rem;
+	line-height: 1.6;
+}
+
+/* When there is no detail block the bottom corners should also be rounded */
+.fhir-error:only-child {
+	border-radius: 6px;
+}
+
+.fhir-error a {
+	color: #7f1d1d;
+	font-weight: 600;
+	text-decoration: underline;
+}
+
+.fhir-error-detail {
+	/* Monospace block for raw error text from Epic */
+	font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+	font-size: 0.78rem;
+	background: #fff1f2;
+	color: #7f1d1d;
+	padding: 0.75rem 1rem;
+	border-left: 4px solid #dc2626;
+	border-radius: 0 0 6px 6px;
+	overflow-x: auto;
+	/* pre-wrap wraps long error lines rather than forcing horizontal scroll */
+	white-space: pre-wrap;
 }

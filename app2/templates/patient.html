@@ -1,0 +1,67 @@
+<!--
+  patient.html — Patient portal page.
+  Extends portal.html (the base layout) and fills two blocks:
+
+    actions  — the GET /Patient button and its loading indicator
+    content  — the #result div that HTMX injects the FHIR response into
+-->
+{% extends "portal.html" %}
+
+{% block actions %}
+<div class="portal-actions">
+
+  <!--
+    HTMX attributes on this button drive the entire FHIR interaction:
+
+    hx-get         Sends GET /fhir/patient to our FastAPI server.
+                   The server (not the browser) holds the Bearer token,
+                   calls Epic's FHIR API, then returns a styled HTML fragment.
+
+    hx-target      HTMX injects the server's response into the element
+                   with id="result" — the div in the content block below.
+
+    hx-swap        Replaces the inner content of #result (innerHTML),
+                   not the div element itself.
+
+    hx-indicator   While the request is in flight, HTMX makes #fhir-loading
+                   visible by raising its opacity (see CSS .htmx-indicator).
+
+    hx-disabled-elt Disables this button for the duration of the request
+                   so the user cannot queue duplicate calls.
+  -->
+  <button class="btn"
+          hx-get="/fhir/patient"
+          hx-target="#result"
+          hx-swap="innerHTML"
+          hx-indicator="#fhir-loading"
+          hx-disabled-elt="this">
+    GET /Patient
+  </button>
+
+  <button class="btn"
+          hx-get="/fhir/medication"
+          hx-target="#result"
+          hx-swap="innerHTML"
+          hx-indicator="#fhir-loading"
+          hx-disabled-elt="this">
+    GET /MedicationRequest
+  </button>
+
+
+  <!-- Shown by HTMX while a request is in flight; hidden otherwise. -->
+  <span id="fhir-loading" class="htmx-indicator fhir-loading">Loading&hellip;</span>
+
+</div>
+{% endblock %}
+
+
+{% block content %}
+<!--
+  Result area — starts empty.
+  When the GET /Patient button is clicked, HTMX sends a request to
+  /fhir/patient and injects the returned HTML fragment here.
+  The server returns either a <pre class="fhir-json"> block (success)
+  or a <p class="fhir-error"> message (error).
+-->
+<div id="result"></div>
+{% endblock %}

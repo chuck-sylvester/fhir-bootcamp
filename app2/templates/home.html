@@ -7,7 +7,8 @@
     <link rel="icon" href="/static/image/favicon-fhir-72.ico">
     <link rel="stylesheet" href="{{ request.url_for('static', path='css/main.css') }}">
 </head>
-<body>
+<body class="home-body">
+    <img src="/static/image/epic-sandbox-logo.png" alt="Epic Sandbox Logo" class="page-logo">
     <div class="card">
         <h1>Epic Sandbox Integration</h1>
 
@@ -36,6 +37,18 @@
 
             <div class="action-row">
                 <a href="/auth/logout" class="btn btn--secondary">Disconnect</a>
+                {% if id_token_claims %}
+                <!--
+                  Triggers the <dialog> modal below via the native showModal() API.
+                  Rendered only when the openid scope was granted and an id_token
+                  was returned by Epic — id_token_claims is None otherwise.
+                -->
+                <button class="btn btn--secondary"
+                        onclick="document.getElementById('id-token-dialog').showModal()">
+                  ID Token
+                </button>
+                {% endif %}
+                <a href="/patient" class="btn" target="_blank">Portal</a>
             </div>
 
         {% else %}
@@ -45,5 +58,44 @@
 
         {% endif %}
     </div>
+
+    {% if id_token_claims %}
+    <!--
+      HTML <dialog> — a native browser modal with built-in focus trapping,
+      ESC-to-close, and a ::backdrop overlay. No JavaScript library needed.
+
+      Three ways to close this dialog:
+        1. Click the × button  →  calls this.closest('dialog').close()
+        2. Press ESC           →  native dialog behavior, no code required
+        3. Click the backdrop  →  the onclick on <dialog> checks event.target;
+                                  if the click landed on the dialog element itself
+                                  (i.e. outside the content box), it closes.
+
+      id_token_claims_json is pre-formatted JSON produced by json.dumps(indent=2)
+      in pages.py. The | safe filter is used because Jinja2's default autoescaping
+      would convert quote characters to &quot;, making the JSON unreadable in the
+      code block. The data originates from Epic's HTTPS token endpoint and contains
+      only structured claim values, so injected HTML is not a realistic risk here.
+    -->
+    <dialog id="id-token-dialog"
+            onclick="if (event.target === this) this.close()">
+
+      <div class="dialog-header">
+        <h2>OpenID Connect ID Token</h2>
+        <button class="dialog-close"
+                onclick="this.closest('dialog').close()"
+                aria-label="Close dialog">&times;</button>
+      </div>
+
+      <div class="dialog-body">
+        <p class="dialog-subtitle">
+          Decoded JWT payload &mdash; identity claims returned by Epic
+        </p>
+        <pre class="fhir-json">{{ id_token_claims_json | safe }}</pre>
+      </div>
+
+    </dialog>
+    {% endif %}
+
 </body>
 </html>
