@@ -1,5 +1,8 @@
 # App 1
+A simple patient portal using HAPI FHIR JPA server.
 
-For this app, I will primarily use and expand the application developed as part of the 15-day FHIR App Challenge.  
+Review and expansion of application developed as part of the 15-day FHIR App Challenge.  
 
-I will also create a cli folder and do some experimental coding there.
+Add cli folder for experimental coding.
+
+**See:** docs/app1-guide.md
