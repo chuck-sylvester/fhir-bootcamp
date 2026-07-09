@@ -28,6 +28,7 @@ load_dotenv()
 
 APP_NAME = os.getenv('APP_NAME')
 FHIR_BASE_URL = os.getenv('FHIR_BASE_URL')
+FHIR_API_TOKEN_EXTERNAL = os.getenv('FHIR_API_TOKEN_EXTERNAL_2')
 
 
 def fetch_patient_resource(BASE_URL, headers) -> dict[str, Any] | None:
@@ -88,11 +89,11 @@ def print_patient_list(patients):
 
     for patient in patients:
         patient_id = patient.get("resource").get("id")
-        patient_name_given  = patient.get("resource").get("name")[0].get("given")[0]
-        patient_name_family = patient.get("resource").get("name")[0].get("family")
+        patient_name_given  = patient.get("resource").get("name")[0].get("given", [""])[0]
+        patient_name_family = patient.get("resource").get("name")[0].get("family", "Unknown")
         patient_full_name = f"{patient_name_given} {patient_name_family}"
         patient_gender = patient.get("resource").get("gender")
-        patient_birth_date = patient.get("resource").get("birthDate")
+        patient_birth_date = patient.get("resource").get("birthDate", "1200-01-01")
         patient_age = calculate_age(patient_birth_date)
         if patient_age == -1:
             patient_age = "--"
@@ -121,6 +122,11 @@ def main():
     """
 
     headers = {"Accept": "application/fhir+json"}
+
+    if FHIR_API_TOKEN_EXTERNAL:
+        headers["Authorization"] = f"Bearer {FHIR_API_TOKEN_EXTERNAL}"
+
+    print(f"\n{headers}\n")
 
     patient_resource = fetch_patient_resource(FHIR_BASE_URL, headers)
     
