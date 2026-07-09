@@ -236,6 +236,161 @@ async def fhir_get_medication_request(request: Request):
     return HTMLResponse(content=f'<pre class="fhir-json">{formatted_json}</pre>')
 
 
+@router.get("/fhir/labreport", response_class=HTMLResponse, include_in_schema=False)
+async def fhir_get_lab_report(request: Request):
+    """
+    HTMX endpoint — calls GET /Observation?patient=<id>&category=laboratory
+    on the Epic FHIR R4 sandbox.
+
+    Observation with category=laboratory returns lab results (blood panels,
+    urinalysis, cultures, etc.). The category value is a code from the
+    standard system http://terminology.hl7.org/CodeSystem/observation-category.
+
+    Requires the patient/Observation.read scope and the Observation.Read (R4)
+    capability enabled in the Epic app registration.
+
+    NOTE: Observation bundles can be large — a patient with significant lab
+    history may return hundreds of entries. To limit results, add
+    "_count": <n> to the params dict below and handle Bundle.link[next]
+    for pagination. Not yet implemented.
+    """
+
+    # --- 1. Read the session ID from the signed session cookie ---
+    session_id = request.session.get("session_id")
+    if not session_id:
+        return _error_html("No active session. "
+                           '<a href="/auth/login">Connect to Epic Sandbox</a> first.')
+
+    # --- 2. Look up the access token and patient ID in the server-side token store ---
+    token_entry = request.app.state.token_store.get(session_id, {})
+    access_token = token_entry.get("access_token")
+    if not access_token:
+        return _error_html("Session token not found — the server may have restarted. "
+                           '<a href="/auth/login">Reconnect to Epic Sandbox</a>.')
+
+    patient_id = token_entry.get("patient", "")
+    if not patient_id:
+        return _error_html(
+            "No patient ID in session. "
+            "Observation requires a patient-scoped launch. "
+            "Ensure the <code>launch/patient</code> scope is included and "
+            '<a href="/auth/login">reconnect to Epic Sandbox</a>.'
+        )
+
+    # --- 3. Check whether the access token has already expired ---
+    expires_at_str = request.session.get("token_expires_at")
+    if expires_at_str:
+        expires_at = datetime.fromisoformat(expires_at_str)
+        if datetime.now(timezone.utc) >= expires_at:
+            return _error_html("Access token has expired. "
+                               '<a href="/auth/login">Reconnect to Epic Sandbox</a>.')
+
+    # --- 4. Call the Epic FHIR API ---
+    # category=laboratory filters to lab results only. Both patient and category
+    # are required; omitting either causes Epic to reject the request.
+    try:
+        response = await request.app.state.http_client.get(
+            f"{settings.epic_fhir_base_url}/Observation",
+            params={"patient": patient_id, "category": "laboratory"},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/fhir+json",
+            },
+        )
+    except httpx.TransportError as exc:
+        return _error_html(f"Network error contacting Epic FHIR ({type(exc).__name__}). "
+                           "Please try again.")
+
+    # --- 5. Handle a non-2xx response from Epic ---
+    if not response.is_success:
+        return _error_html(
+            f"Epic FHIR returned HTTP {response.status_code}.",
+            detail=response.text,
+        )
+
+    # --- 6. Format and return the FHIR Bundle as an HTML fragment ---
+    formatted_json = json.dumps(response.json(), indent=2)
+    return HTMLResponse(content=f'<pre class="fhir-json">{formatted_json}</pre>')
+
+
+@router.get("/fhir/vitalsigns", response_class=HTMLResponse, include_in_schema=False)
+async def fhir_get_vital_signs(request: Request):
+    """
+    HTMX endpoint — calls GET /Observation?patient=<id>&category=vital-signs
+    on the Epic FHIR R4 sandbox.
+
+    Observation with category=vital-signs returns clinical measurements such as
+    blood pressure, heart rate, temperature, height, and weight. The category
+    value is a code from http://terminology.hl7.org/CodeSystem/observation-category.
+
+    Requires the patient/Observation.read scope and the Observation.Read (R4)
+    capability enabled in the Epic app registration — the same registration
+    requirement as the lab report endpoint above.
+
+    NOTE: Observation bundles can be large — a patient with an extended clinical
+    history may return many vital sign entries. To limit results, add
+    "_count": <n> to the params dict below and handle Bundle.link[next]
+    for pagination. Not yet implemented.
+    """
+
+    # --- 1. Read the session ID from the signed session cookie ---
+    session_id = request.session.get("session_id")
+    if not session_id:
+        return _error_html("No active session. "
+                           '<a href="/auth/login">Connect to Epic Sandbox</a> first.')
+
+    # --- 2. Look up the access token and patient ID in the server-side token store ---
+    token_entry = request.app.state.token_store.get(session_id, {})
+    access_token = token_entry.get("access_token")
+    if not access_token:
+        return _error_html("Session token not found — the server may have restarted. "
+                           '<a href="/auth/login">Reconnect to Epic Sandbox</a>.')
+
+    patient_id = token_entry.get("patient", "")
+    if not patient_id:
+        return _error_html(
+            "No patient ID in session. "
+            "Observation requires a patient-scoped launch. "
+            "Ensure the <code>launch/patient</code> scope is included and "
+            '<a href="/auth/login">reconnect to Epic Sandbox</a>.'
+        )
+
+    # --- 3. Check whether the access token has already expired ---
+    expires_at_str = request.session.get("token_expires_at")
+    if expires_at_str:
+        expires_at = datetime.fromisoformat(expires_at_str)
+        if datetime.now(timezone.utc) >= expires_at:
+            return _error_html("Access token has expired. "
+                               '<a href="/auth/login">Reconnect to Epic Sandbox</a>.')
+
+    # --- 4. Call the Epic FHIR API ---
+    # category=vital-signs filters to vitals only. Both patient and category
+    # are required; omitting either causes Epic to reject the request.
+    try:
+        response = await request.app.state.http_client.get(
+            f"{settings.epic_fhir_base_url}/Observation",
+            params={"patient": patient_id, "category": "vital-signs"},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/fhir+json",
+            },
+        )
+    except httpx.TransportError as exc:
+        return _error_html(f"Network error contacting Epic FHIR ({type(exc).__name__}). "
+                           "Please try again.")
+
+    # --- 5. Handle a non-2xx response from Epic ---
+    if not response.is_success:
+        return _error_html(
+            f"Epic FHIR returned HTTP {response.status_code}.",
+            detail=response.text,
+        )
+
+    # --- 6. Format and return the FHIR Bundle as an HTML fragment ---
+    formatted_json = json.dumps(response.json(), indent=2)
+    return HTMLResponse(content=f'<pre class="fhir-json">{formatted_json}</pre>')
+
+
 def _decode_jwt_payload(token: str) -> dict | None:
     """
     Decodes the payload segment of a JWT without verifying the signature.

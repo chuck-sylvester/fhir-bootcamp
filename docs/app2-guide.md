@@ -12,8 +12,9 @@ app2 is a server-side rendered FastAPI web application that authenticates users 
 - Exchanges the code for an access token via a server-to-server POST (back-channel)
 - Stores the access token server-side; places only a lightweight session cookie in the browser
 - Displays session status (active/expired), token expiration time, and granted scopes on the home page
+- Decodes the OIDC ID token server-side and presents its identity claims in a browser modal (ID Token button)
 - Supports logout (clears session cookie and removes server-side token)
-- Provides a patient portal page with a button that calls the Epic FHIR R4 `GET /Patient` endpoint and renders the result inline using HTMX
+- Provides a patient portal page with HTMX-wired buttons that call Epic FHIR R4 endpoints: `GET /Patient`, `GET /MedicationRequest`, `GET /Observation` (lab reports), and `GET /Observation` (vital signs)
 
 ---
 
@@ -26,10 +27,14 @@ app2/
 ├── main.py                 # FastAPI app: lifespan, middleware, router registration
 ├── routers/
 │   ├── auth.py             # OAuth routes: /auth/login, /auth/callback, /auth/logout
-│   └── pages.py            # UI routes: / (home), /patient, /fhir/patient (HTMX)
+│   └── pages.py            # UI routes: / (home), /patient, /fhir/patient, /fhir/medication
+├── services/
+│   └── patient_service.py  # Standalone synchronous service module (CLI/experimental use)
 ├── static/
 │   ├── css/main.css
-│   └── image/favicon-fhir-72.ico
+│   └── image/
+│       ├── epic-sandbox-logo.png
+│       └── favicon-fhir-72.ico
 └── templates/
     ├── home.html           # Jinja2 template: landing / session status page
     ├── portal.html         # Jinja2 base layout for portal pages (template inheritance)
@@ -60,6 +65,495 @@ pip install -r requirements.txt
 
 ---
 
+## Tech Stack: Architecture and Integration
+
+### The Server-Side Rendering Paradigm
+
+App2 is a **server-side rendered (SSR)** application: every HTML page and every HTMX fragment is assembled in Python from a Jinja2 template before being sent to the browser. The browser receives finished HTML — not a JavaScript bundle that builds the page after download, and not JSON data that client-side code must transform into markup.
+
+This is the inverse of a single-page application (SPA):
+
+| | SSR with HTMX (app2) | SPA (React, Vue, Svelte) |
+|---|---|---|
+| **Who renders HTML** | Server (Python + Jinja2) | Client (JavaScript) |
+| **What travels over the wire** | Complete HTML pages or HTML fragments | JSON data |
+| **Page transitions** | Full navigations or HTMX partial swaps | Client-side routing (no reload) |
+| **JavaScript required** | Minimal — HTMX is a single script tag | Large bundle required |
+| **Backend role** | Render HTML + call external APIs | Data API only |
+| **Logic lives in** | Python (testable, typed) | JavaScript (two runtimes to reason about) |
+| **Complexity budget** | Mostly in Python | Mostly in JavaScript |
+
+HTMX sits between full-page SSR and SPA: the server still produces HTML (SSR's strength), but HTMX injects that HTML into a specific part of the current page rather than triggering a full navigation. The user gets the interactive feel of a SPA without the client-side complexity.
+
+### Request Lifecycle: How the Layers Collaborate
+
+A complete interaction through app2 touches all four major components. Here is the full sequence when a logged-in user clicks "GET /Patient" on the portal page:
+
+```
+Browser (HTMX)
+  │
+  │  1. HTMX intercepts the button click.
+  │     Issues: GET /fhir/patient
+  │     With:   session cookie (same-origin, sent automatically)
+  │
+  ▼
+FastAPI + Starlette (uvicorn)
+  │
+  │  2. SessionMiddleware decodes the signed cookie on the way in.
+  │     Populates request.session with the cookie's payload dict.
+  │
+  │  3. Router matches GET /fhir/patient → fhir_get_patient() handler.
+  │
+  │  4. Handler reads session_id from request.session.
+  │     Looks up access_token from request.app.state.token_store.
+  │
+  │  5. Handler calls Epic FHIR using the shared AsyncClient.
+  │     Control yields (await) — event loop can serve other requests during the wait.
+  │
+  ▼
+HTTPX AsyncClient  →  Epic FHIR Server
+  │
+  │  6. Sends: GET /FHIR/R4/Patient
+  │     With:  Authorization: Bearer <access_token>
+  │            Accept: application/fhir+json
+  │
+  │  7. Epic validates the JWT, checks granted scope, returns a FHIR Bundle.
+  │
+  │  8. HTTPX delivers the response object back to the handler.
+  │
+  ▼
+FastAPI handler
+  │
+  │  9. json.dumps(response.json(), indent=2) — pretty-print the Bundle.
+  │     Returns: HTMLResponse('<pre class="fhir-json">...</pre>')
+  │
+  │  10. SessionMiddleware re-serializes request.session on the way out
+  │      and sets the updated Set-Cookie header (if session changed).
+  │
+  ▼
+Browser (HTMX)
+  │
+  │  11. HTMX receives the HTML fragment (<pre>…</pre>).
+  │      Injects it into #result using innerHTML swap.
+  │      No navigation. No page reload. Address bar unchanged.
+  │
+  ▼
+  Page updates in place.
+```
+
+The browser never sees the access token, never receives raw JSON, and does not write a line of rendering code. All logic is in Python. The browser's job is to display the HTML that arrives.
+
+---
+
+### FastAPI
+
+#### Async-first design
+
+FastAPI is built on [Starlette](https://www.starlette.io/) and the ASGI (Asynchronous Server Gateway Interface) standard. Every route handler in app2 is declared `async def`, allowing uvicorn to serve other requests while waiting for I/O — specifically, the outbound HTTPS calls to Epic:
+
+```python
+async def fhir_get_patient(request: Request):
+    response = await request.app.state.http_client.get(...)
+    #                  ^^^^^ suspends here during Epic's response time (~100–500 ms)
+    ...
+```
+
+The `await` keyword yields control back to the event loop during the network wait. A synchronous framework (Flask, Django without async views) would block the entire process during that wait. An ASGI app continues handling other requests in the meantime.
+
+**The rule**: if a function contains `await`, it must be `async def`. If a function calls another `async def` function, it too must be `async def`. Async propagates upward through the call stack — you cannot `await` inside a non-async function. Never call `await` in a regular function; Python raises `SyntaxError`.
+
+For CPU-bound work (heavy computation, not I/O) inside an async handler, use `asyncio.to_thread()` to delegate to a thread pool rather than blocking the event loop directly:
+
+```python
+import asyncio
+result = await asyncio.to_thread(some_blocking_function, arg1, arg2)
+```
+
+#### APIRouter and application assembly
+
+`main.py` is intentionally thin. It creates the `FastAPI` instance, registers middleware, and mounts routers. Route handlers live in the `routers/` modules:
+
+```python
+# main.py
+app.include_router(auth_router, prefix="/auth")   # all routes in auth.py get /auth prefix
+app.include_router(pages_router)                  # pages.py routes are unprefixed
+```
+
+The `prefix` parameter prepends to every route defined in the router. A route declared `@router.get("/login")` in `auth.py` becomes `/auth/login` in the full application. Routes in `pages.py` use no prefix, so `@router.get("/")` stays `/`.
+
+This pattern scales cleanly: add a new module to `routers/`, define routes within it, call `include_router` once in `main.py`. Each router is independently readable and testable without knowledge of the others.
+
+#### The `Request` object as the integration point
+
+Virtually every route handler in app2 accepts a `Request` parameter. `Request` is the primary integration point — the gateway to everything that crosses the HTTP boundary and to application-level state:
+
+```python
+request.session           # dict-like: decoded/signed session cookie payload
+request.app               # the FastAPI application instance
+request.app.state         # State namespace set up in lifespan (token_store, http_client, etc.)
+request.query_params      # URL query string params (e.g., ?code=... from Epic callback)
+request.headers           # incoming HTTP headers
+request.url_for("name")   # reverse URL lookup by route name — generates absolute URLs
+```
+
+Understanding `Request` is the key to reading app2's handlers: they read inputs from `request.session` and `request.query_params`, retrieve resources from `request.app.state`, and delegate outbound HTTP to `request.app.state.http_client`.
+
+`request.app` is particularly important in modular apps: routers do not import `app` directly (that would create a circular import). Instead, any handler in any router can access the application via `request.app`. This is why `app.state.token_store` is reachable from `auth.py`, `pages.py`, or any future router without any import dependencies between them.
+
+#### Middleware and the request/response pipeline
+
+Middleware wraps every request/response cycle. In app2, `SessionMiddleware` is the only middleware:
+
+```python
+app.add_middleware(SessionMiddleware, secret_key=..., https_only=False, same_site="lax")
+```
+
+`SessionMiddleware` performs two operations automatically on every request:
+
+**Inbound**: reads the `session` cookie, verifies the `itsdangerous` HMAC signature, decodes the JSON payload into a Python dict, and attaches it to the request as `request.session`. If the cookie is absent, tampered with, or expired, `request.session` is an empty dict.
+
+**Outbound**: after the handler returns, `SessionMiddleware` serializes `request.session` back to JSON, signs it, and sets the `Set-Cookie` header on the response. Any mutation the handler makes to `request.session` is automatically persisted — no explicit "save session" call is needed.
+
+Multiple middleware can be stacked with multiple `add_middleware` calls. They execute in reverse registration order (last registered runs outermost). For app2's single middleware the order doesn't matter, but this is worth knowing when adding logging, CORS, or rate-limiting middleware later.
+
+#### `response_class` and `include_in_schema`
+
+Two decorator kwargs appear throughout app2's routes and are worth understanding:
+
+```python
+@router.get("/fhir/patient", response_class=HTMLResponse, include_in_schema=False)
+```
+
+**`response_class=HTMLResponse`**: FastAPI's default response type is `JSONResponse` (Content-Type: `application/json`). Specifying `HTMLResponse` changes the default to `Content-Type: text/html`. Route handlers that return `HTMLResponse(content=...)` directly would work without this, but the decorator-level declaration also affects FastAPI's OpenAPI schema generation and makes intent clear.
+
+**`include_in_schema=False`**: excludes the route from FastAPI's auto-generated OpenAPI documentation (accessible at `/docs`). Use this for internal endpoints that are UI implementation details — HTMX fragment endpoints, internal redirect handlers, and similar. It keeps the public API surface clean and signals to future developers that these routes are not intended as a stable external contract.
+
+---
+
+### HTMX
+
+#### The hypermedia model
+
+HTMX's philosophical foundation comes from [Roy Fielding's REST constraints](https://www.ics.uci.edu/~fielding/pubs/dissertation/rest_arch_style.htm) — specifically **hypermedia as the engine of application state** (HATEOAS). The core idea: HTML with its links and forms already describes what the user can do next. A web application doesn't need JavaScript to dynamically update the page; it needs a way to ask the server for new HTML and insert it.
+
+HTMX extends HTML elements with new attributes that enable HTTP requests and DOM updates without writing JavaScript. The philosophical consequence: **HTMX endpoints must return HTML, not JSON.**
+
+```python
+# Wrong for HTMX — the browser receives JSON and renders it as raw text
+return JSONResponse({"status": "ok", "data": patient_bundle})
+
+# Right for HTMX — the browser injects the HTML directly into #result
+return HTMLResponse(content=f'<pre class="fhir-json">{formatted_json}</pre>')
+```
+
+This is a fundamental mindset shift from API-first thinking. In an HTMX application, the server is not a data provider; it is an HTML renderer. The server decides what the user sees by choosing what HTML to return. The browser's only job is to put it somewhere.
+
+#### HTMX attribute vocabulary
+
+The five attributes in app2 cover the most common patterns:
+
+| Attribute | Purpose | Default behavior |
+|---|---|---|
+| `hx-get` / `hx-post` / `hx-put` / `hx-delete` | HTTP method and URL to call | (required — no default) |
+| `hx-target` | CSS selector for the element to update | The element that triggered the request |
+| `hx-swap` | How to insert the response into the target | `innerHTML` |
+| `hx-indicator` | CSS selector for a loading indicator | None |
+| `hx-disabled-elt` | Elements to disable during the request | None |
+
+Beyond these, the HTMX attribute library includes:
+
+| Attribute | Use case |
+|---|---|
+| `hx-trigger` | Control when the request fires — `click` (default for buttons), `change`, `keyup delay:500ms`, `intersect` (on scroll into view), `every 2s` (polling) |
+| `hx-push-url` | Update the browser's address bar without navigation |
+| `hx-boost` | Upgrade all `<a>` and `<form>` elements in a subtree to HTMX requests automatically |
+| `hx-confirm` | Show a browser confirm dialog before issuing the request |
+| `hx-vals` | Include additional values in the request body |
+| `hx-headers` | Include additional HTTP headers with the request |
+| `hx-on:htmx:response-error` | Override HTMX's handling of non-2xx responses |
+
+#### Swap strategies
+
+`hx-swap` controls how the response HTML is placed relative to the target element:
+
+| Value | Effect |
+|---|---|
+| `innerHTML` | Replace the target's inner content (the target element itself remains) |
+| `outerHTML` | Replace the entire target element including the element itself |
+| `beforebegin` | Insert before the target element in the DOM |
+| `afterbegin` | Insert as the first child of the target |
+| `beforeend` | Append as the last child of the target — ideal for infinite scroll, append-only activity feeds |
+| `afterend` | Insert after the target element |
+| `delete` | Remove the target from the DOM (response content is ignored) |
+| `none` | Do not modify the DOM — useful when the request has a side effect and a separate `hx-trigger` handles the refresh |
+
+App2 uses `innerHTML` for all current endpoints. `beforeend` is the one to reach for when building a list that accumulates entries across multiple HTMX calls.
+
+#### Loading indicators
+
+HTMX adds the CSS class `htmx-request` to the element initiating a request while the request is in flight. `hx-indicator` designates a separate element that HTMX reveals during this time by transitioning its opacity:
+
+```html
+<!-- Button: HTMX adds htmx-request class while request is in flight -->
+<button hx-get="/fhir/patient" hx-indicator="#fhir-loading" ...>GET /Patient</button>
+
+<!-- Indicator: hidden by default via .htmx-indicator CSS; shown when parent has htmx-request -->
+<span id="fhir-loading" class="htmx-indicator fhir-loading">Loading&hellip;</span>
+```
+
+The `.htmx-indicator` class sets `opacity: 0` and `transition: opacity 200ms` by default (from the HTMX CDN script). No JavaScript animation code is needed — HTMX and CSS handle the entire interaction.
+
+#### Non-2xx responses and error HTML
+
+HTMX does **not** swap the response body into the target when the server returns a 4xx or 5xx status code. By default it fires an `htmx:responseError` event and leaves the page unchanged. This means HTMX endpoints that encounter errors should return `HTTP 200` with a styled error HTML fragment:
+
+```python
+# Wrong: HTMX ignores this response body; #result stays unchanged
+return HTMLResponse(content="<p>Something failed.</p>", status_code=400)
+
+# Right: HTMX swaps the error HTML into #result
+return _error_html("Something failed.")  # returns HTMLResponse with status 200
+```
+
+This is why `_error_html` exists in `pages.py` and why every error path returns through it. The user sees the error message in context; no full-page reload or redirect is needed.
+
+(HTMX's non-2xx behavior can be overridden with `hx-on:htmx:response-error`, but returning error HTML at 200 is simpler and more predictable.)
+
+#### When HTMX is — and isn't — the right tool
+
+HTMX is a strong choice when:
+- UI interactions map cleanly to server round-trips: button click → server call → DOM update
+- The team wants to stay in Python and avoid a JavaScript build pipeline
+- State lives on the server and the UI is a view over it
+- Interactions are relatively simple: show/hide, append results, submit forms
+
+HTMX is less ideal when:
+- Rich client-side state is required (complex multi-step forms with local validation, drag-and-drop editors, real-time collaborative canvases)
+- Sub-100ms response times are critical for perceived performance — every HTMX interaction is a round-trip to the server
+- Offline support or progressive web app features are needed
+- The team is already invested in a JavaScript framework
+
+For this bootcamp's FHIR API explorer pattern — click a button, get data from a server, display it — HTMX is a near-perfect fit.
+
+---
+
+### Jinja2 Templates
+
+#### The context dict: the Python-to-HTML boundary
+
+The context dict passed to `TemplateResponse` is the only bridge between Python and the template. Every variable the template references must be explicitly included:
+
+```python
+return request.app.state.templates.TemplateResponse(
+    request,
+    "home.html",
+    {
+        "session_active": session_active,       # bool
+        "expires_display": expires_display,     # str (pre-formatted for display)
+        "id_token_claims_json": ...,            # str | None (pre-formatted JSON)
+    },
+)
+```
+
+Variables absent from the dict raise `UndefinedError` at render time (or silently produce empty strings with lax undefined settings). FastAPI's `TemplateResponse` automatically adds `request` to the context, which is why `{{ request.url_for('static', path='css/main.css') }}` works in templates without explicitly passing `request`.
+
+**Best practice: pass pre-formatted values, not raw objects.** In app2, `id_token_claims_json` is a JSON string computed by `json.dumps(indent=2)` in Python — the template just injects it, no processing needed. `expires_display` is a formatted datetime string like `"Jun 16, 2026 at 02:30 PM UTC"` — the template does not need to know about `strftime`. This keeps templates thin and keeps logic in Python where it can be tested and type-checked.
+
+#### Template inheritance in depth
+
+Jinja2's template inheritance mirrors class inheritance: a base template defines the common layout and declares named override points (`{% block name %}{% endblock %}`); child templates fill in those blocks.
+
+App2's portal hierarchy:
+
+```
+portal.html (base)
+  Defines:
+    {% block title %}     ← page title in <title>
+    {% block actions %}   ← FHIR action buttons between the <hr> tags
+    {% block content %}   ← main result area below the second <hr>
+
+patient.html (child)
+  {% extends "portal.html" %}
+  Fills:
+    {% block actions %}   ← GET /Patient and GET /MedicationRequest buttons
+    {% block content %}   ← <div id="result"></div>
+```
+
+Key patterns for template inheritance:
+
+**`{{ super() }}`** — renders the parent block's content before adding to it. Useful when a child should append to, not replace, the base template's block:
+
+```html
+{% block actions %}
+  {{ super() }}
+  <!-- additional buttons specific to this child -->
+{% endblock %}
+```
+
+**Multi-level inheritance** — a grandchild template can extend a child, which extends the base. Useful when a subset of pages share a sub-layout (e.g., all admin pages share a sidebar defined in `admin_base.html`, which itself extends `portal.html`).
+
+**Variables across blocks** — a variable defined with `{% set x = ... %}` at the template level (outside any block) is available in all blocks of that template. Variables set inside a block are local to that block.
+
+#### Autoescaping and the `| safe` filter
+
+Jinja2 autoescaping converts `<`, `>`, `&`, `"`, and `'` to HTML entities when rendering template variables. This is the primary built-in defense against XSS: if a user-supplied string containing `<script>alert(1)</script>` ends up in a template variable, it renders as visible text, not executable JavaScript.
+
+The `| safe` filter bypasses autoescaping for a specific variable. Use it only when:
+1. The content originates from a trusted, server-controlled source (not user input)
+2. The content is intentionally HTML or pre-formatted text that must render as-is
+
+In app2, `id_token_claims_json` is marked `| safe` because it is JSON generated by `json.dumps()` from a dict decoded from Epic's HTTPS token endpoint — no user input is in the path.
+
+**Hard rule**: `{{ user_supplied_value | safe }}` is a security vulnerability. Never apply `| safe` to any string that originated from user input, URL parameters, or external systems that could inject malicious content.
+
+#### Useful Jinja2 built-in filters
+
+| Filter | Example | Effect |
+|---|---|---|
+| `\| default("N/A")` | `{{ value \| default("N/A") }}` | Render fallback when value is undefined or falsy |
+| `\| escape` | `{{ html_string \| escape }}` | Explicitly HTML-escape (useful when autoescaping is off) |
+| `\| truncate(50)` | `{{ long_text \| truncate(50) }}` | Shorten to N chars and append ellipsis |
+| `\| upper` / `\| lower` | `{{ name \| upper }}` | Case conversion |
+| `\| tojson` | `{{ data_dict \| tojson }}` | Serialize Python dict/list to a JSON-safe string for use in inline `<script>` tags |
+| `\| join(", ")` | `{{ items \| join(", ") }}` | Join a list with a separator |
+| `\| length` | `{{ items \| length }}` | Length of a sequence |
+| `\| selectattr("active")` | `{{ users \| selectattr("active") }}` | Filter a list of objects by attribute truthiness |
+
+`| tojson` is particularly useful for injecting Python data into inline JavaScript without manual serialization:
+
+```html
+<script>
+  const config = {{ settings_dict | tojson }};
+</script>
+```
+
+#### Comments in Jinja2 templates
+
+Jinja2 has two comment syntaxes:
+
+- **HTML comments** `<!-- ... -->`: visible in the browser's DevTools source view; Jinja2 still evaluates block tags inside them, which can cause `TemplateSyntaxError` when block or extends tags appear in comments.
+- **Jinja2 block comments** `{# ... #}`: stripped entirely before any processing; block tags inside them are never evaluated. Use this for commenting out Jinja2 logic or for header comments in base templates that define blocks.
+
+`portal.html` uses a `{# ... #}` block comment for its header exactly because the comment would otherwise need to reference Jinja2 block syntax.
+
+---
+
+### HTTPX
+
+#### Why `httpx` instead of `requests`
+
+`requests` is a synchronous library — it blocks the calling thread during the network wait. In an async FastAPI handler, blocking the thread means blocking the event loop, which prevents all other requests from being processed during that time:
+
+```python
+# Blocks the entire event loop — never do this in an async handler
+import requests
+response = requests.get(url, headers=headers)   # blocks for 300ms
+
+# Non-blocking — suspends the handler, event loop serves other requests meanwhile
+import httpx
+response = await http_client.get(url, headers=headers)
+```
+
+`httpx` provides an `AsyncClient` with an API nearly identical to `requests`, so the mental model transfers directly. The only difference in usage is the `await` keyword and the declaration of the surrounding function as `async def`.
+
+(This is why `services/patient_service.py` is marked as a CLI/experimental module — it uses `requests` synchronously, which is fine in a standalone script but wrong inside a FastAPI route handler.)
+
+#### Connection pooling and the shared `AsyncClient`
+
+`httpx.AsyncClient` maintains a pool of persistent TCP connections (HTTP keep-alive). Establishing a TCP + TLS connection to a remote server takes time — typically 50–200ms — due to the TCP handshake plus the TLS certificate negotiation. If a new `AsyncClient` were created for every request, that overhead would be paid every time.
+
+The lifespan pattern creates one client at startup and reuses it across all requests:
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.http_client = httpx.AsyncClient()   # one client, shared pool
+    yield
+    await app.state.http_client.aclose()           # drain connections on shutdown
+```
+
+Epic's servers see a persistent connection that is reused across token exchanges and FHIR calls — faster and more efficient. The `.aclose()` in the shutdown phase drains in-flight requests and releases socket file descriptors cleanly.
+
+#### Configuring timeouts
+
+App2 does not configure explicit timeouts on the `AsyncClient`. In development, this is acceptable — Epic's sandbox typically responds in well under a second. For production, always set a timeout:
+
+```python
+app.state.http_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+)
+```
+
+Without timeouts, a hung Epic endpoint holds the handler open indefinitely. With many concurrent users, this eventually exhausts the event loop's capacity to handle new requests — a slow resource leak that manifests as increasing latency across the entire application.
+
+#### Reading responses safely
+
+The `httpx.Response` object provides several useful properties:
+
+```python
+response.status_code      # int: 200, 401, 403, 500, etc.
+response.is_success       # True for 2xx status codes
+response.is_client_error  # True for 4xx
+response.is_server_error  # True for 5xx
+response.text             # response body as str (decoded using Content-Type charset)
+response.json()           # parse body as JSON → Python dict/list (raises if not valid JSON)
+response.headers          # dict-like: response headers
+response.content          # response body as raw bytes
+```
+
+Always check `is_success` before calling `.json()`. An error response from Epic (401, 403, etc.) may return a plain-text or XML body — calling `.json()` on it raises `json.JSONDecodeError`. The pattern in app2:
+
+```python
+if not response.is_success:
+    return _error_html(f"Epic FHIR returned HTTP {response.status_code}.", detail=response.text)
+
+formatted_json = json.dumps(response.json(), indent=2)  # safe: we know it's JSON
+```
+
+---
+
+### Best Practices for This Stack
+
+#### Async all the way down — no sync blocking in handlers
+
+Every function called from an `async def` route handler that does any I/O must itself be `async def` and must be `await`ed. Mixing synchronous blocking calls (file I/O with standard `open()`, synchronous HTTP with `requests`, `time.sleep()`) into an async handler blocks the event loop and defeats the concurrency benefits of ASGI. Use async equivalents (`aiofiles`, `httpx.AsyncClient`, `asyncio.sleep`) or delegate to a thread pool via `asyncio.to_thread()`.
+
+#### Keep route handlers thin — logic belongs in helpers
+
+Route handlers should read inputs, call helpers, and return responses. Business logic (building FHIR query parameters, transforming response data, formatting output) belongs in helper functions or service modules. In app2, `_decode_jwt_payload` and `_error_html` are small examples of this separation. Thin handlers are easier to read, and logic in pure functions is easier to unit test independently of the HTTP layer.
+
+#### Use `app.state` for shared resources — not module-level globals
+
+Module-level globals in `main.py` create invisible dependencies between modules and cause problems in tests that create multiple `app` instances. `app.state` makes application-level resources explicit — they are always accessed through `request.app.state`, making the dependency visible at the call site. This also makes it straightforward to inject mocks in tests by replacing `app.state.http_client` or `app.state.token_store` before a test request.
+
+#### Always include `hx-disabled-elt` on HTMX action buttons
+
+Without `hx-disabled-elt="this"`, a user can click a button multiple times before the first request completes, queuing duplicate server calls. Always disable the triggering element for the duration of the request. For a button that triggers an expensive or non-idempotent operation (a write, a token exchange), this prevents duplicate submissions.
+
+#### Store only non-sensitive metadata in the session cookie
+
+The session cookie is signed (the signature proves it wasn't tampered with) but **not encrypted** (the payload is base64-encoded JSON, readable by anyone who has the cookie value). Store only lightweight, non-sensitive metadata in the cookie: session IDs, expiry timestamps, scope strings. Never put access tokens, secrets, or PII directly in the session. Keep sensitive data in the server-side store (`app.state.token_store` or Redis in production) and reference it by a short random ID in the cookie.
+
+#### Scope template context to what the template needs — not more
+
+Pass the minimal set of pre-computed values to `TemplateResponse`. Passing entire database models or complex Python objects as template context creates invisible coupling: if the object's attribute names change, the template breaks silently at render time rather than raising a Python error. Pre-format display strings (dates, currencies, truncated text) in Python and pass the result; the template should not call methods or navigate object graphs.
+
+#### Match `include_in_schema=False` to endpoint intent consistently
+
+Every HTMX fragment endpoint and every internal redirect handler should be `include_in_schema=False`. These are UI implementation details, not public API contracts. Keeping them out of `/docs` prevents confusion for future developers (or API clients) who might otherwise try to call them directly.
+
+#### Use `Path(__file__).parent` for template and static paths in lifespan
+
+Template and static file directory paths resolved relative to `main.py`'s own location are robust regardless of the working directory at runtime:
+
+```python
+Jinja2Templates(directory=Path(__file__).parent / "templates")
+```
+
+A relative string like `"app2/templates"` works only when uvicorn is invoked from the project root. The `Path(__file__).parent` form is an absolute path at runtime and works from any working directory.
+
+---
+
 ## Environment Variables
 
 All configuration is stored in `.env` at the project root (not committed to git). app2 reads from this file via `app2/config.py`.
@@ -85,7 +579,7 @@ APP_REDIRECT_URI=http://localhost:8000/auth/callback
 
 - `SESSION_SECRET_KEY`: Used by Starlette's `SessionMiddleware` to sign the session cookie with `itsdangerous.TimestampSigner`. Must be a long random string. Generate one with `python -c "import secrets; print(secrets.token_hex(32))"`.
 - `EPIC_CLIENT_SECRET`: Use the raw secret value shown immediately after creating the app in the Epic developer portal. The portal later displays a hashed/masked version — use only the original value shown at creation time.
-- `EPIC_SCOPE`: Keep this minimal. Epic returns the full set of approved scopes in the token response, and storing a large scope string in the session cookie can exceed the browser's 4096-byte cookie size limit. See the **Scope and Cookie Size** section below.
+- `EPIC_SCOPE`: In Epic's **sandbox**, this value acts as a trigger to initiate the OAuth flow rather than as a precise declaration of which resources to access. Epic grants all API capabilities registered in the developer portal regardless of which specific FHIR scopes appear in the authorization request. For sandbox development, `"openid fhirUser"` is sufficient — the actual FHIR access is controlled entirely by the app registration. **In Epic's production environment this changes**: the requested scopes must match registered capabilities and only the explicitly requested scopes are granted. See the **Epic Scope Behavior: Sandbox vs. Production** subsection below and the **Scope and Cookie Size** section for cookie size considerations.
 
 ---
 
@@ -109,6 +603,32 @@ App2 uses a **confidential client** registration. A confidential client is appro
 **JWK Set URLs**: Leave blank. These are only needed for `private_key_jwt` client authentication. This app uses `client_secret_post` (client credentials sent in the POST body), so no JWK configuration is needed.
 
 **Persistent access**: Not required unless the app needs to make FHIR calls in the background while the user is offline. App2 only makes calls during an active user session.
+
+### API Capabilities and Category-Specific Registration
+
+For most FHIR resource types, enabling a single capability (e.g., MedicationRequest.Read) grants access to the entire resource. **Observation is different**: Epic registers Observation access per category. Each clinical domain is a separate capability toggle:
+
+| Epic capability name | Category granted | Scope format in token |
+|---|---|---|
+| Observation.Read — Vital Signs (R4) | `vital-signs` | `patient/Observation.r?category=...observation-category\|vital-signs` |
+| Observation.Read — Laboratory (R4) | `laboratory` | `patient/Observation.r?category=...observation-category\|laboratory` |
+| Observation.Read — Social History (R4) | `survey` | `patient/Observation.r?category=...observation-category\|survey` |
+
+The token response reflects this — rather than a single `patient/Observation.r`, you receive one scope entry per enabled category. Epic enforces each grant independently at the API level: a token with only the `survey` category grant will receive a 403 on a request for `category=laboratory` even though both use the same resource type.
+
+**After enabling new capabilities in the portal**, changes typically provision within a few minutes in the sandbox. The quickest way to confirm provisioning is to log out of app2, reconnect to Epic, and check the Scope row on the home page. The new category scopes should appear in the granted scope string.
+
+### Epic Scope Behavior: Sandbox vs. Production
+
+This is one of the most practically important things to understand when developing against Epic's sandbox.
+
+**In Epic's sandbox**, `EPIC_SCOPE` in `.env` is effectively a trigger for the OAuth flow. Epic grants every API capability registered in the developer portal, regardless of what specific FHIR scopes were included in the authorization request. App2 uses `EPIC_SCOPE="openid fhirUser"` — two identity scopes — and Epic's sandbox returns a token containing a dozen clinical resource scopes drawn entirely from the app registration.
+
+The implication: adding or removing `patient/Observation.read` from `EPIC_SCOPE` has no effect in the sandbox. What controls access is the app registration. If you get a 403 on a FHIR call, the fix is in the portal, not in `EPIC_SCOPE`.
+
+**In Epic's production environment**, behavior matches the SMART on FHIR specification. The authorization request must explicitly include each scope the app needs, and Epic only grants scopes that were both requested and registered. An app that requests `openid fhirUser` in production receives exactly those two scopes — no clinical resource access.
+
+The practical consequence: `EPIC_SCOPE` needs no changes during sandbox development, but must be updated to enumerate all required resource scopes before deploying to production. The app registration must also be approved for production use separately from the sandbox registration.
 
 ---
 
@@ -179,6 +699,24 @@ After a successful token exchange, the server:
 4. Writes only lightweight metadata to the session cookie: `session_id`, `token_expires_at` (ISO 8601), and `scope`
 
 The access token itself never reaches the browser. See the **Session Management** section for why.
+
+The token store entry holds five fields:
+
+```python
+request.app.state.token_store[session_id] = {
+    "access_token": token_data["access_token"],
+    "refresh_token": token_data.get("refresh_token", ""),
+    "scope": token_data.get("scope", ""),
+    # id_token: OIDC identity JWT — present when openid scope is granted.
+    # Decoded server-side to display identity claims in the ID Token dialog.
+    "id_token": token_data.get("id_token", ""),
+    # patient: FHIR ID of the in-context patient from Epic's token response.
+    # Required as a search parameter for patient-specific resources such as
+    # MedicationRequest (/MedicationRequest?patient=<id>). Empty string
+    # when the launch was not patient-scoped.
+    "patient": token_data.get("patient", ""),
+}
+```
 
 ### Step 5 — Redirect home
 
@@ -378,7 +916,7 @@ The distinction matters for how each token is used:
 - **`access_token`**: treat as an opaque credential — forward it unchanged to the FHIR server in the `Authorization` header. The client application should not decode it or build logic that depends on its internal claim structure; only the resource server is expected to interpret it.
 - **`id_token`**: meant to be decoded by the application to learn who the authenticated user is. Its payload contains standard OpenID Connect identity claims such as `sub` (Epic user ID), and optionally `name`, `email`, and `fhirUser` depending on what scopes were granted.
 
-App2 currently stores only the `access_token`. The `id_token` is present in `token_data` but not stored. A future iteration could decode the `id_token` to display the logged-in user's name on the home page.
+App2 stores both tokens in the server-side token store. The `id_token` is decoded server-side at page load time and its claims are displayed in the **ID Token dialog** on the home page. See the **ID Token Dialog** section for full details.
 
 ### Decoding a JWT for inspection
 
@@ -406,6 +944,104 @@ Note: this decodes but does **not** verify the signature. For production use, ve
 
 ---
 
+## ID Token Dialog
+
+### Overview
+
+When the `openid` scope is granted, Epic returns an `id_token` alongside the `access_token` in the token response. The `id_token` is an OIDC JWT containing identity claims about the authenticated user — not a credential for API calls, but an assertion of who logged in. Its payload typically includes `sub` (Epic user ID), `fhirUser` (full FHIR URL of the user's resource), and `iat`/`exp` timestamps.
+
+App2 stores the `id_token` in the server-side token store and decodes it server-side at every home page load to populate an "ID Token" button and `<dialog>` modal. Clicking the button opens the modal showing the decoded JWT payload.
+
+### Server-side decoding in the home route
+
+The `GET /` handler in `pages.py` retrieves the raw `id_token` JWT from the token store, decodes its payload with `_decode_jwt_payload`, and passes two template variables to `home.html`:
+
+```python
+id_token_claims = None
+id_token_claims_json = None
+if session_id:
+    token_entry = request.app.state.token_store.get(session_id, {})
+    raw_id_token = token_entry.get("id_token", "")
+    if raw_id_token:
+        id_token_claims = _decode_jwt_payload(raw_id_token)
+        id_token_claims_json = json.dumps(id_token_claims, indent=2)
+```
+
+`id_token_claims_json` is pre-formatted JSON (pretty-printed with `indent=2`) produced on the server. The template injects it directly into a `<pre>` block without any further processing. Both variables are `None` when the session has no `id_token` (openid scope not granted, or not yet logged in), which causes the button and dialog to be omitted entirely from the rendered HTML.
+
+### `_decode_jwt_payload`
+
+```python
+def _decode_jwt_payload(token: str) -> dict | None:
+    try:
+        payload_b64 = token.split(".")[1]
+        padding = 4 - len(payload_b64) % 4
+        payload_b64 += "=" * (padding % 4)
+        return json.loads(base64.urlsafe_b64decode(payload_b64))
+    except Exception:
+        return None
+```
+
+A JWT's payload segment is Base64URL-encoded JSON. Base64URL omits padding characters (`=`), so the decoder must restore them before calling `urlsafe_b64decode`. The two-step modulo (`4 - len % 4`, then `% 4`) avoids adding four `=` characters when the length is already a multiple of four — adding `====` would be invalid Base64.
+
+Signature verification is intentionally skipped. The token was received from Epic over a TLS-secured back-channel during the OAuth callback, so its authenticity is already established by the transport. This function is for display only.
+
+The function returns `None` on any decoding failure rather than raising, so a malformed or absent `id_token` does not crash the home page — the ID Token button is simply not rendered.
+
+### The `<dialog>` element
+
+The modal uses the native HTML `<dialog>` element — no JavaScript library is needed:
+
+```html
+<dialog id="id-token-dialog"
+        onclick="if (event.target === this) this.close()">
+
+  <div class="dialog-header">
+    <h2>OpenID Connect ID Token</h2>
+    <button class="dialog-close"
+            onclick="this.closest('dialog').close()"
+            aria-label="Close dialog">&times;</button>
+  </div>
+
+  <div class="dialog-body">
+    <p class="dialog-subtitle">
+      Decoded JWT payload &mdash; identity claims returned by Epic
+    </p>
+    <pre class="fhir-json">{{ id_token_claims_json | safe }}</pre>
+  </div>
+
+</dialog>
+```
+
+Three ways to close the dialog:
+
+1. **× button** — inline `onclick` calls `this.closest('dialog').close()`
+2. **ESC key** — native browser behavior built into `<dialog>`, no code required
+3. **Backdrop click** — the `onclick` on `<dialog>` checks `event.target === this`; a click that lands on the dialog element itself (outside the content box) closes it
+
+The dialog is opened by the "ID Token" button in the action row:
+
+```html
+<button class="btn btn--secondary"
+        onclick="document.getElementById('id-token-dialog').showModal()">
+  ID Token
+</button>
+```
+
+`showModal()` opens the dialog as a modal: it is centered on the page, a `::backdrop` overlay dims the background, and focus is trapped inside the dialog until it is closed. This is all handled by the browser; no CSS or JS is required beyond calling `showModal()`.
+
+Both the button and the `<dialog>` element are wrapped in `{% if id_token_claims %}` so they are only present in the DOM when the decoded claims are available.
+
+### The `| safe` Jinja2 filter
+
+```html
+<pre class="fhir-json">{{ id_token_claims_json | safe }}</pre>
+```
+
+Jinja2 auto-escapes HTML by default: double-quote characters in JSON become `&quot;`, making the `<pre>` block unreadable. The `| safe` filter marks the string as already safe, bypassing escaping. This is appropriate here because `id_token_claims_json` originates from Epic's HTTPS token endpoint and contains only structured claim values (strings, numbers, booleans) — not user-controlled HTML.
+
+---
+
 ## Session Management
 
 ### Why a server-side token store?
@@ -425,6 +1061,8 @@ app.state.token_store[session_id] = {
     "access_token": "...",
     "refresh_token": "...",
     "scope": "...",
+    "id_token": "...",   # OIDC identity JWT; decoded server-side for the ID Token dialog
+    "patient": "...",    # Epic patient FHIR ID; required for MedicationRequest queries
 }
 ```
 
@@ -586,7 +1224,7 @@ Note: `app2/routers/pages.py` also has a module-level `templates = Jinja2Templat
 
 **`app.state.token_store`** — `{}`
 
-An in-memory Python dict keyed by `session_id` (a random hex string generated at login). It stores the full token payload — including the `access_token` JWT — received from Epic's token endpoint. Keeping the token here rather than in the session cookie is what allows the cookie to stay small. See the **Session Management** section for full details.
+An in-memory Python dict keyed by `session_id` (a random hex string generated at login). It stores five fields from Epic's token response: `access_token`, `refresh_token`, `scope`, `id_token` (the OIDC identity JWT, decoded server-side for the ID Token dialog), and `patient` (the FHIR patient ID, required as a search parameter for MedicationRequest). Keeping all tokens here rather than in the session cookie is what allows the cookie to stay small. See the **Session Management** section for full details.
 
 ### How route handlers access `app.state`
 
@@ -644,12 +1282,12 @@ The `session_active` flag is set by the `GET /` route handler in `app2/routers/p
 
 ### Template inheritance: `portal.html` and `patient.html`
 
-The portal is built with Jinja2 template inheritance. `portal.html` is the **base layout** — it contains the common HTML structure, HTMX script tag, and CSS links that every portal page shares. Child templates extend it using `{% extends "portal.html" %}` and fill two named blocks:
+The portal is built with Jinja2 template inheritance. `portal.html` is the **base layout** — it contains the common HTML structure, HTMX script tag, CSS links, and the Font Awesome icon kit CDN script that every portal page shares. Child templates extend it using `{% extends "portal.html" %}` and fill two named blocks:
 
 - `{% block actions %}` — the section between the two `<hr>` tags, intended for action buttons
 - `{% block content %}` — inside `<main>`, below the second `<hr>`, intended for results
 
-`patient.html` is the first child template. It fills `{% block actions %}` with the "GET /Patient" button wired to HTMX, and fills `{% block content %}` with `<div id="result"></div>` — the HTMX injection target.
+`patient.html` is the first child template. It fills `{% block actions %}` with five HTMX-wired buttons — Patient Summary, GET /Patient, GET /MedicationRequest, GET /LabReports, and GET /VitalSigns — and fills `{% block content %}` with `<div id="result"></div>`, the HTMX injection target shared by all buttons.
 
 New portal pages for additional FHIR resources follow the same pattern: create a new child template that extends `portal.html` and fills both blocks.
 
@@ -659,19 +1297,38 @@ The `portal.html` header comment uses `{# ... #}` (a Jinja2 block comment) rathe
 
 One additional subtlety: Jinja2 block comments cannot be nested, and the closing delimiter `#}` cannot be escaped. If the comment text itself contains a literal `#}` sequence (for example, in a code example showing Jinja2 comment syntax), the parser treats that as the end of the comment and evaluates everything after it as live template code. The `portal.html` header comment avoids writing the literal Jinja2 closing delimiters for this reason.
 
-### Routes: `/patient` and `/fhir/patient`
+### Routes: `/patient` and the HTMX fragment endpoints
 
-Two routes in `app2/routers/pages.py` serve the portal:
+Five routes in `app2/routers/pages.py` serve the portal:
 
-**`GET /patient`** — a standard page route. Renders `patient.html` with the `title` variable. The route handler does no session checking; the page renders regardless of login state. The HTMX button will display an error fragment in `#result` if no session is active.
+**`GET /patient`** — a standard page route. Renders `patient.html` with the `title` variable. The route handler does no session checking; the page renders regardless of login state. The HTMX buttons will display error fragments in `#result` if no session is active.
 
-**`GET /fhir/patient`** — an HTMX endpoint. This is **not** a page route. It returns a small HTML fragment that HTMX injects into `#result`. It is called by the browser's HTMX runtime when the button is clicked, not by direct browser navigation. The route is marked `include_in_schema=False` so it is excluded from the FastAPI auto-generated API docs.
+**`GET /fhir/patient`** — HTMX endpoint; calls Epic `GET /Patient` and returns an HTML fragment.
 
-### How HTMX connects the button to the server
+**`GET /fhir/medication`** — HTMX endpoint; calls Epic `GET /MedicationRequest?patient=<id>` and returns an HTML fragment. See the **GET /MedicationRequest** section for full details.
 
-The "GET /Patient" button in `patient.html` carries four HTMX attributes:
+**`GET /fhir/labreport`** — HTMX endpoint; calls Epic `GET /Observation?patient=<id>&category=laboratory` and returns an HTML fragment.
+
+**`GET /fhir/vitalsigns`** — HTMX endpoint; calls Epic `GET /Observation?patient=<id>&category=vital-signs` and returns an HTML fragment.
+
+All four fragment endpoints are marked `include_in_schema=False` — they are excluded from FastAPI's auto-generated API docs at `/docs`. See the **GET /Observation** section for full details on the lab and vital signs endpoints.
+
+### How HTMX connects the buttons to the server
+
+All action buttons in `patient.html` use the same five HTMX attributes, differing only in `hx-get`. The full button set as currently implemented:
 
 ```html
+<!-- Featured shortcut — styled differently (btn--special); calls the same
+     medication endpoint as GET /MedicationRequest below -->
+<button class="btn btn--special"
+        hx-get="/fhir/medication"
+        hx-target="#result"
+        hx-swap="innerHTML"
+        hx-indicator="#fhir-loading"
+        hx-disabled-elt="this">
+  Patient Summary
+</button>
+
 <button class="btn"
         hx-get="/fhir/patient"
         hx-target="#result"
@@ -680,17 +1337,44 @@ The "GET /Patient" button in `patient.html` carries four HTMX attributes:
         hx-disabled-elt="this">
   GET /Patient
 </button>
+
+<button class="btn"
+        hx-get="/fhir/medication"
+        hx-target="#result"
+        hx-swap="innerHTML"
+        hx-indicator="#fhir-loading"
+        hx-disabled-elt="this">
+  GET /MedicationRequest
+</button>
+
+<button class="btn"
+        hx-get="/fhir/labreport"
+        hx-target="#result"
+        hx-swap="innerHTML"
+        hx-indicator="#fhir-loading"
+        hx-disabled-elt="this">
+  GET /LabReports
+</button>
+
+<button class="btn"
+        hx-get="/fhir/vitalsigns"
+        hx-target="#result"
+        hx-swap="innerHTML"
+        hx-indicator="#fhir-loading"
+        hx-disabled-elt="this">
+  GET /VitalSigns
+</button>
 ```
 
 | Attribute | Effect |
 |---|---|
-| `hx-get="/fhir/patient"` | On click, HTMX sends `GET /fhir/patient` to the FastAPI server |
+| `hx-get="..."` | On click, HTMX sends a GET request to the specified FastAPI endpoint |
 | `hx-target="#result"` | The server's HTML response is injected into the element with `id="result"` |
 | `hx-swap="innerHTML"` | The inner content of `#result` is replaced (the `<div>` itself stays) |
 | `hx-indicator="#fhir-loading"` | The loading span fades in while the request is in flight |
 | `hx-disabled-elt="this"` | The button is disabled for the duration of the request to prevent double-clicks |
 
-No page navigation occurs. The browser address bar does not change. The session cookie is sent automatically with the HTMX request because HTMX issues a same-origin HTTP GET like any other browser request.
+All buttons share the same `#result` target — clicking any button replaces whatever was previously displayed. No page navigation occurs. The session cookie is sent automatically with each HTMX request because HTMX issues a same-origin HTTP GET like any other browser request.
 
 ### The FHIR request flow in `fhir_get_patient`
 
@@ -762,7 +1446,7 @@ return HTMLResponse(content=f'<pre class="fhir-json">{formatted_json}</pre>')
 
 ### Network error handling (`httpx.TransportError`)
 
-Both the token exchange in `auth.py` and the FHIR call in `pages.py` wrap their `httpx` calls in `try/except httpx.TransportError`:
+The token exchange in `auth.py` and all FHIR calls in `pages.py` wrap their `httpx` calls in `try/except httpx.TransportError`:
 
 ```python
 try:
@@ -793,7 +1477,220 @@ def _error_html(message: str, detail: str = "") -> HTMLResponse:
     return HTMLResponse(content=f'<p class="fhir-error">{message}</p>{detail_block}')
 ```
 
-All error paths in `fhir_get_patient` return through this helper. It produces a styled HTML fragment rather than a JSON error body or a full error page, so HTMX can inject it directly into `#result`. The optional `detail` argument adds a second block containing raw response text — shown when Epic returns a non-2xx status code with a body describing the problem.
+All error paths in all FHIR route handlers return through this helper. It produces a styled HTML fragment rather than a JSON error body or a full error page, so HTMX can inject it directly into `#result`. The optional `detail` argument adds a second block containing raw response text — shown when Epic returns a non-2xx status code with a body describing the problem.
+
+---
+
+## GET /MedicationRequest
+
+### Why MedicationRequest requires a patient ID
+
+`GET /Patient` uses a special `me` context — Epic automatically scopes it to the patient associated with the OAuth session. `MedicationRequest` has no such shortcut. It is always a search against a specific patient and requires an explicit query parameter:
+
+```
+GET /MedicationRequest?patient=<fhir_patient_id>
+```
+
+Without the `patient` parameter, Epic rejects the request. The patient FHIR ID must be known before the call is made.
+
+### Where the patient ID comes from
+
+Epic includes a `patient` field in the token response for patient-scoped standalone launches. App2 captures this value during `/auth/callback` and stores it in the server-side token store alongside the access token:
+
+```python
+request.app.state.token_store[session_id] = {
+    "access_token": token_data["access_token"],
+    ...
+    "patient": token_data.get("patient", ""),
+}
+```
+
+`token_data.get("patient", "")` returns an empty string when Epic does not include a patient context — this happens when the launch is not patient-scoped (e.g., a provider browsing without selecting a specific patient). The `fhir_get_medication_request` handler checks for this and returns an informative error fragment rather than making a doomed API call.
+
+### Scope and Epic app registration
+
+Two things must be in place for the MedicationRequest call to succeed:
+
+1. **Scope**: `patient/MedicationRequest.read` must be included in `EPIC_SCOPE` in `.env` (Epic abbreviates this as `patient/MedicationRequest.r` in the token response).
+2. **App registration capability**: The **MedicationRequest.Read (R4)** capability must be enabled in the Epic developer portal app registration. If the capability is not registered, Epic returns a 403 or 400 error even when the scope is correct.
+
+To enable the capability:
+1. Log into [open.epic.com](https://open.epic.com) and open the app registration
+2. Under **API Capabilities**, find and enable **MedicationRequest.Read (R4)**
+3. Ensure `patient/MedicationRequest.read` is in `EPIC_SCOPE` in `.env`
+
+### The route: `GET /fhir/medication`
+
+The route handler follows the same six-step pattern as `fhir_get_patient`, with one additional check for the patient ID inserted between the token lookup and the expiry check:
+
+**Step 1 — Read the session ID**
+
+```python
+session_id = request.session.get("session_id")
+```
+
+**Step 2 — Look up the access token and patient ID**
+
+```python
+token_entry = request.app.state.token_store.get(session_id, {})
+access_token = token_entry.get("access_token")
+patient_id = token_entry.get("patient", "")
+```
+
+Both values were written to the token store during `/auth/callback`. If `patient_id` is empty, the handler returns an error fragment explaining that a patient-scoped launch is required, rather than making a request Epic will reject:
+
+```python
+if not patient_id:
+    return _error_html(
+        "No patient ID in session. "
+        "MedicationRequest requires a patient-scoped launch. "
+        "Ensure the <code>launch/patient</code> scope is included and "
+        '<a href="/auth/login">reconnect to Epic Sandbox</a>.'
+    )
+```
+
+**Step 3 — Check token expiry**
+
+Same as `fhir_get_patient`: read `token_expires_at` from the session cookie and compare to `datetime.now(timezone.utc)`.
+
+**Step 4 — Call Epic FHIR with the Bearer token and patient parameter**
+
+```python
+response = await request.app.state.http_client.get(
+    f"{settings.epic_fhir_base_url}/MedicationRequest",
+    params={"patient": patient_id},
+    headers={
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/fhir+json",
+    },
+)
+```
+
+`httpx` serializes the `params` dict as a URL query string (`?patient=<id>`). Epic's FHIR server requires this parameter to identify which patient's medication orders to return.
+
+**Step 5 — Handle non-2xx responses**
+
+Same as `fhir_get_patient`: non-2xx status returns an error fragment with the raw response body in the `detail` block.
+
+**Step 6 — Format and return the FHIR Bundle**
+
+```python
+formatted_json = json.dumps(response.json(), indent=2)
+return HTMLResponse(content=f'<pre class="fhir-json">{formatted_json}</pre>')
+```
+
+Epic responds with a FHIR Bundle where each `entry` is a `MedicationRequest` resource representing a single prescription or medication order for the patient. The Bundle is pretty-printed and injected into `#result` by HTMX.
+
+---
+
+## GET /Observation: Lab Reports and Vital Signs
+
+### The Observation resource
+
+`Observation` is FHIR's catch-all resource for clinical measurements and findings. A single resource type covers an enormous range of data: lab results, vital signs, SDOH questionnaire responses, smoking status, body measurements, and more. The resource has a consistent structure regardless of what kind of measurement it contains:
+
+```json
+{
+  "resourceType": "Observation",
+  "id": "...",
+  "status": "final",
+  "category": [{ "coding": [{ "system": "...", "code": "vital-signs" }] }],
+  "code": { "coding": [{ "system": "http://loinc.org", "code": "8867-4", "display": "Heart rate" }] },
+  "subject": { "reference": "Patient/abc123" },
+  "effectiveDateTime": "2024-03-15T10:30:00Z",
+  "valueQuantity": { "value": 72, "unit": "beats/minute" }
+}
+```
+
+The `code` element identifies what was measured (usually a LOINC code). The `value[x]` element holds the result — a quantity with unit, a coded value, a string, or a boolean depending on the measurement type. The `category` element identifies the clinical domain.
+
+### The category system
+
+Because Observation covers so many domains, filtering by `category` is essential for retrieving a coherent subset. The standard category system is `http://terminology.hl7.org/CodeSystem/observation-category`, and the codes relevant to app2 are:
+
+| Code | Clinical domain | Examples |
+|---|---|---|
+| `laboratory` | Lab results | CBC, metabolic panel, lipid panel, urinalysis, cultures |
+| `vital-signs` | Vital sign measurements | Blood pressure, heart rate, temperature, SpO2, height, weight, BMI |
+| `survey` | Questionnaire responses | SDOH assessments, PHQ-9, GAD-7 |
+
+A single patient visit may produce Observations across multiple categories. Filtering by category is how you pull a coherent set — lab results separately from vitals — rather than retrieving everything at once.
+
+### Why both endpoints use `GET /Observation`
+
+Lab reports and vital signs share a single FHIR resource type. The only difference between the two FHIR calls is the `category` query parameter value. Both routes in app2 call the same Epic FHIR endpoint; the category parameter routes the query to the appropriate data:
+
+```
+GET /Observation?patient=<id>&category=laboratory    → lab results Bundle
+GET /Observation?patient=<id>&category=vital-signs   → vital signs Bundle
+```
+
+### Scope requirements and Epic's category-specific grants
+
+Epic implements Observation access per category in both the app registration and the token response. Each category that has been enabled in the developer portal appears as a separate scope entry using SMART v2's parameterized scope format:
+
+```
+patient/Observation.r?category=http://terminology.hl7.org/CodeSystem/observation-category|laboratory
+patient/Observation.r?category=http://terminology.hl7.org/CodeSystem/observation-category|vital-signs
+```
+
+Epic enforces these grants independently at the API level. A token that includes the `laboratory` grant but not `vital-signs` will succeed on lab requests and return 403 on vital signs requests — even though both calls target the same resource type. This is different from resources like MedicationRequest, where a single `patient/MedicationRequest.r` scope covers the entire resource.
+
+**Diagnosing a 403**: check the Scope row on the home page after reconnecting. If you see `patient/Observation.r?category=...|survey` but not `laboratory` or `vital-signs`, the relevant capabilities are not yet registered or provisioned in the Epic developer portal. See the **API Capabilities and Category-Specific Registration** subsection in the Epic Sandbox App Registration section.
+
+### Result volume and pagination
+
+Observation bundles can be significantly larger than MedicationRequest bundles. A patient with years of clinical history may have hundreds of lab results or vital sign measurements. Epic returns results in a single bundle by default, up to its internal page size limit.
+
+**To limit results**, add `_count` as a third query parameter:
+
+```python
+params={"patient": patient_id, "category": "laboratory", "_count": 20}
+```
+
+When more results exist beyond `_count`, Epic includes a `link` array in the Bundle with a `next` relation containing the URL for the next page:
+
+```json
+{
+  "resourceType": "Bundle",
+  "link": [
+    { "relation": "self", "url": "..." },
+    { "relation": "next", "url": "https://fhir.epic.com/.../Observation?patient=...&category=laboratory&sessionID=...&page=2" }
+  ],
+  "total": 147,
+  "entry": [ ... ]
+}
+```
+
+App2 does not currently implement `_count` or pagination — the full result set is returned in a single request. This is sufficient for development against the sandbox test patient, whose Observation history is limited. Before deploying against real patients, add `_count` to the params dict and implement pagination if needed.
+
+**Empty bundles are valid**: if the sandbox test patient has no recorded lab results or vital signs, Epic returns a valid 200 response with `"total": 0` and an empty `entry` array. The route handler formats and returns this normally — the `<pre>` block will show the empty Bundle structure. This is correct behavior, not an error.
+
+### The route handlers: `fhir_get_lab_report` and `fhir_get_vital_signs`
+
+Both handlers in `pages.py` follow the identical six-step pattern as `fhir_get_medication_request`. The only structural difference is the `category` value passed in step 4:
+
+**Step 1** — Read `session_id` from the session cookie.
+
+**Step 2** — Look up `access_token` and `patient` from the token store. The `patient` FHIR ID is needed as a required search parameter, identical to MedicationRequest. If absent, an informative error fragment is returned.
+
+**Step 3** — Check token expiry via `token_expires_at` in the session cookie.
+
+**Step 4** — Call Epic FHIR:
+
+```python
+# Lab reports
+params={"patient": patient_id, "category": "laboratory"}
+
+# Vital signs
+params={"patient": patient_id, "category": "vital-signs"}
+```
+
+Both use `settings.epic_fhir_base_url + "/Observation"` as the URL and the same `Authorization: Bearer` and `Accept: application/fhir+json` headers used by all other FHIR route handlers.
+
+**Step 5** — Handle non-2xx responses via `_error_html`.
+
+**Step 6** — `json.dumps(response.json(), indent=2)` and return as `HTMLResponse` wrapped in `<pre class="fhir-json">`.
 
 ---
 
@@ -807,6 +1704,9 @@ All error paths in `fhir_get_patient` return through this helper. It produces a 
 | `GET` | `/auth/logout` | Clears session cookie and removes server-side token entry |
 | `GET` | `/patient` | Patient portal page — renders the HTMX-wired portal UI |
 | `GET` | `/fhir/patient` | HTMX endpoint — calls Epic FHIR `GET /Patient`; returns HTML fragment |
+| `GET` | `/fhir/medication` | HTMX endpoint — calls Epic FHIR `GET /MedicationRequest?patient=<id>`; returns HTML fragment |
+| `GET` | `/fhir/labreport` | HTMX endpoint — calls Epic FHIR `GET /Observation?patient=<id>&category=laboratory`; returns HTML fragment |
+| `GET` | `/fhir/vitalsigns` | HTMX endpoint — calls Epic FHIR `GET /Observation?patient=<id>&category=vital-signs`; returns HTML fragment |
 | `GET` | `/health` | System health check — returns app name, version, environment |
 
 ---
@@ -814,6 +1714,14 @@ All error paths in `fhir_get_patient` return through this helper. It produces a 
 ## `__init__.py`
 
 `app2/__init__.py` must exist (it can be empty) for Python to treat `app2` as a package. Without it, the `uvicorn app2.main:app` invocation from the project root will fail with a `ModuleNotFoundError`.
+
+---
+
+## `services/patient_service.py`
+
+`app2/services/patient_service.py` is a standalone synchronous module used for CLI experimentation and development testing. It is **not** wired into the main application routes. It uses the synchronous `requests` library (rather than the async `httpx` used throughout the rest of app2) to call `GET /Patient` directly against the Epic FHIR sandbox.
+
+Because it uses `requests` synchronously and omits authentication headers, it is not suitable for production use. Its value is as a quick sanity-check tool for verifying the FHIR base URL and basic connectivity outside of the full OAuth flow.
 
 ---
 

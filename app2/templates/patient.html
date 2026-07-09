@@ -29,6 +29,16 @@
     hx-disabled-elt Disables this button for the duration of the request
                    so the user cannot queue duplicate calls.
   -->
+  <button class="btn btn--special"
+          hx-get="/fhir/medication"
+          hx-target="#result"
+          hx-swap="innerHTML"
+          hx-indicator="#fhir-loading"
+          hx-disabled-elt="this">
+    Patient Summary
+  </button>
+
+
   <button class="btn"
           hx-get="/fhir/patient"
           hx-target="#result"
@@ -47,7 +57,24 @@
     GET /MedicationRequest
   </button>
 
+  <button class="btn"
+          hx-get="/fhir/labreport"
+          hx-target="#result"
+          hx-swap="innerHTML"
+          hx-indicator="#fhir-loading"
+          hx-disabled-elt="this">
+    GET /LabReports
+  </button>
 
+  <button class="btn"
+          hx-get="/fhir/vitalsigns"
+          hx-target="#result"
+          hx-swap="innerHTML"
+          hx-indicator="#fhir-loading"
+          hx-disabled-elt="this">
+    GET /VitalSigns
+  </button>
+  
   <!-- Shown by HTMX while a request is in flight; hidden otherwise. -->
   <span id="fhir-loading" class="htmx-indicator fhir-loading">Loading&hellip;</span>
 

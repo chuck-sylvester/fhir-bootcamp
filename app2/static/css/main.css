@@ -21,7 +21,7 @@
 .page-logo {
 	position: absolute;
 	top: 0.75rem;
-	left: 6rem;
+	left: 4rem;
 	height: 8rem;
 }
 
@@ -47,7 +47,7 @@
 	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
 	padding: 3rem 3.5rem;
 	text-align: center;
-	max-width: 800px;
+	max-width: 1000px;
 	width: 100%;
 }
 
@@ -89,6 +89,14 @@
 
 .btn--secondary:hover {
 	background: #4b5563;
+}
+
+.btn--special {
+	background:#306D29;
+}
+
+.btn--special:hover {
+	background:#0D530E;
 }
 
 .badge {
