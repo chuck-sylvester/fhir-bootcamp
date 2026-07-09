@@ -1,6 +1,6 @@
 {
   "resourceType": "CapabilityStatement",
-  "id": "9df723ad-c5f1-4fed-956b-4752fde8616c",
+  "id": "8083503c-5953-4eef-b97b-8c2eacff31fd",
   "name": "RestServer",
   "status": "active",
   "date": "2024-02-27T22:26:27Z",
@@ -1256,7 +1256,7 @@
           "extension": [
             {
               "url": "http://hl7api.sourceforge.net/hapi-fhir/res/extdefs.html#resourceCount",
-              "valueDecimal": 9
+              "valueDecimal": 29
             }
           ],
           "type": "Appointment",
@@ -3059,6 +3059,12 @@
           ]
         },
         {
+          "extension": [
+            {
+              "url": "http://hl7api.sourceforge.net/hapi-fhir/res/extdefs.html#resourceCount",
+              "valueDecimal": 2
+            }
+          ],
           "type": "Bundle",
           "profile": "http://hl7.org/fhir/StructureDefinition/Bundle",
           "interaction": [
@@ -8012,7 +8018,7 @@
           "extension": [
             {
               "url": "http://hl7api.sourceforge.net/hapi-fhir/res/extdefs.html#resourceCount",
-              "valueDecimal": 85
+              "valueDecimal": 95
             }
           ],
           "type": "Condition",
@@ -27416,7 +27422,7 @@
           "extension": [
             {
               "url": "http://hl7api.sourceforge.net/hapi-fhir/res/extdefs.html#resourceCount",
-              "valueDecimal": 1538
+              "valueDecimal": 2347
             }
           ],
           "type": "Observation",
@@ -29473,7 +29479,7 @@
           "extension": [
             {
               "url": "http://hl7api.sourceforge.net/hapi-fhir/res/extdefs.html#resourceCount",
-              "valueDecimal": 1894
+              "valueDecimal": 2069
             }
           ],
           "type": "Patient",
@@ -31205,7 +31211,7 @@
           "extension": [
             {
               "url": "http://hl7api.sourceforge.net/hapi-fhir/res/extdefs.html#resourceCount",
-              "valueDecimal": 107
+              "valueDecimal": 115
             }
           ],
           "type": "Practitioner",
@@ -35737,6 +35743,12 @@
           ]
         },
         {
+          "extension": [
+            {
+              "url": "http://hl7api.sourceforge.net/hapi-fhir/res/extdefs.html#resourceCount",
+              "valueDecimal": 16
+            }
+          ],
           "type": "Schedule",
           "profile": "http://hl7.org/fhir/StructureDefinition/Schedule",
           "interaction": [
@@ -36676,6 +36688,12 @@
           ]
         },
         {
+          "extension": [
+            {
+              "url": "http://hl7api.sourceforge.net/hapi-fhir/res/extdefs.html#resourceCount",
+              "valueDecimal": 102
+            }
+          ],
           "type": "Slot",
           "profile": "http://hl7.org/fhir/StructureDefinition/Slot",
           "interaction": [

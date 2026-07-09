@@ -82,11 +82,10 @@ def get_resource_type_list(resource_list: list[dict]) -> list[str]:
 
 def main():
     """
-    Fetch resource data; stop on failure or emplty dictionaryt
+    Fetch resource data; stop on failure or empty dictionary
     Display in JSON format to terminal & write to file
     Display summary of data returned
-    Get list of capabilities from Python dictionary
-    Print list of capabilities in formatted table
+    Get and print list of capabilities from Python dictionary
     """
 
     headers = {"Accept": "application/fhir+json"}

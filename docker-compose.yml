@@ -1,0 +1,20 @@
+# ---------------------------------------------------------------------
+# docker-compose.yml
+# ---------------------------------------------------------------------
+# Startup:
+#   docker compose up -d       # start all services in the background
+#   docker compose ps          # all services should reach healthy/running
+#   docker compose logs -f     # stream all logs
+#
+# Stopping and teardown:
+#   docker compose stop        # stop containers, keep containers + volumes
+#   docker compose down        # remove containers + network, keep volumes
+#   docker compose down -v     # remove containers + network + volumes
+
+services:
+  postgres:
+    container-name: app-postgres-db
+    image: pgvector/pgvector:pg16
+    environment: 
+      POSTGRES_USER: ${POSTGRES_APP_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_APP_PASSWORD}

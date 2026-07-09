@@ -2,27 +2,28 @@
 
 ## Overview
 
-App1 is a Patient Management Application that interfaces with a HAPI FHIR server using FHIR REST APIs. It is the first of five applications built as part of the Medblocks 10-week FHIR Bootcamp, implemented using a Python/SSR stack (FastAPI + HTMX + Jinja2) as an alternative to the bootcamp's Vite/Svelte approach.
+App1 is a Patient Management Application that interfaces with a HAPI FHIR server using FHIR REST APIs. It is the first of five applications built as part of the Medblocks 10-week FHIR Bootcamp, implemented using a Python SSR stack (FastAPI + HTMX + Jinja2) as an alternative to the bootcamp's Vite/Svelte approach.
 
 ## Functional Requirements
 
-1. **List patients** — Display all patients on the FHIR server, showing name, gender, and date of birth.
-2. **Create patient** — Submit a form with name, gender, date of birth, and phone number. All fields must be validated.
-3. **Update patient** — Open any existing patient in the same form and save changes back to the FHIR server.
-4. **Search by name** — Search patients by name with partial-match support.
-5. *(Bonus)* **Search by name or phone** — Extend search to support partial matching on phone number as well.
+1. **List patients** - Display all patients on the FHIR server, showing name, gender, and date of birth.
+2. **Create patient** - Submit a form with name, gender, date of birth, and phone number.
+3. **Update patient** - Open any existing patient in the same form and save changes back to the FHIR server.
+4. **Search by name** - Search patients by name with partial-match support.
+5. **Validate data** - All form fields must be validated.
+6. *(Bonus)* **Search by name or phone** - Extend search to support partial matching on phone number as well.
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Web framework | FastAPI |
-| Frontend | HTMX + Jinja2 Templates (SSR) |
-| HTTP client | requests (sync, for FHIR REST API calls) |
-| Form handling | python-multipart |
-| FHIR server | HAPI FHIR (Docker) |
-| Language | Python 3.12 |
-| Shell | zsh (macOS terminal) |
+| Layer         | Technology                               |
+|---------------|------------------------------------------|
+| Web framework | FastAPI                                  |
+| Frontend      | HTMX + Jinja2 Templates (SSR)            |
+| HTTP client   | requests (sync, for FHIR REST API calls) |
+| Form handling | python-multipart                         |
+| FHIR server   | HAPI FHIR (Docker)                       |
+| Language      | Python 3.12                              |
+| Shell         | zsh (macOS terminal)                     |
 
 ---
 
@@ -147,6 +148,8 @@ fhir-bootcamp/
 
 ### 2.2 Create the Configuration Files
 
+#### .env
+
 The `.env` file lives at the project root and is shared across all applications. It holds environment-specific values (server URLs, ports, credentials) that may be needed by more than one app. This file is not committed to version control (it is listed in `.gitignore`). Each app's own `config.py` reads from this single root-level `.env` using `python-dotenv`.
 
 ```zsh
@@ -159,6 +162,10 @@ Initial contents for `.env`:
 FHIR_BASE_URL=http://localhost:8080/fhir
 APP1_PORT=8001
 ```
+
+Note: try to get into the good habit of also creating a `.env.example` file. You (and others) will thank you later.
+
+#### config.py
 
 Create `config.py` inside the `app1/` folder. Each application maintains its own `config.py` to keep configuration self-contained:
 
