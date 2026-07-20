@@ -1,5 +1,8 @@
-# App 1
-A simple patient portal using HAPI FHIR JPA server.
+# App 1 - Patient Management Application
+
+A simple patient managemment portal using HAPI FHIR JPA server.
+
+## Overview
 
 Review and expansion of application developed as part of the 15-day FHIR App Challenge.  
 

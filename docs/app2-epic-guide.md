@@ -1,4 +1,4 @@
-# app2 — Epic Sandbox OAuth 2.0 Integration
+# App2 — SMART Patient App on Epic
 
 app2 is a server-side rendered FastAPI web application that authenticates users against the Epic Sandbox via the **SMART on FHIR OAuth 2.0 Authorization Code flow**. After login, it holds an access token that can be used to make FHIR R4 API calls on behalf of the authenticated user. The UI is built with Jinja2 templates and plain CSS; no JavaScript framework is used.
 
